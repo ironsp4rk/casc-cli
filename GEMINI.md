@@ -13,17 +13,23 @@ This repository structure is locked to support current source-based development 
 
 ```text
 casc-cli/
-├── .github/        # (Future) CI/CD pipelines for matrix builds and release automation
-├── .gitmodules     # Tracking the CascLib repository commit
-├── choco/          # (Future) Chocolatey package configurations for Windows distribution
-├── ext/            # External dependencies
-│   └── CascLib/    # Git submodule pointing to Zezula's CascLib source
-├── src/            # Rust source code
-│   ├── main.rs     # CLI entry point, argument parsing, and application logic
-│   ├── bindings.rs # Unsafe Rust FFI bindings to CascLib
-│   └── casc.rs     # Safe Rust abstractions wrapping the FFI calls
-├── build.rs        # Build script to compile CascLib and link it to the Rust binary
-├── Cargo.toml      # Rust package metadata and dependencies
+├── .github/                    # (Future) CI/CD pipelines for matrix builds and release automation
+├── .gitmodules                 # Tracking the CascLib repository commit
+├── choco/                      # (Future) Chocolatey package configurations for Windows distribution
+├── ext/                        # External dependencies
+│   └── CascLib/                # Git submodule pointing to Zezula's CascLib source
+├── src/                        # Rust source code
+│   ├── main.rs                 # CLI entry point, argument parsing, and application logic
+│   ├── casc.rs                 # Safe Rust abstractions wrapping the FFI calls
+│   ├── casc/                   # Submodules for the safe wrapper
+│   │   ├── casclib.rs          # FFI abstraction layer (trait and implementation)
+│   │   └── casclib/            # Submodules for casclib
+│   │       └── bindings.rs     # Unsafe Rust FFI bindings to CascLib
+│   ├── commands.rs             # CLI subcommand registration
+│   └── commands/               # CLI subcommand implementations
+│       └── list.rs             # Logic for the 'list' command
+├── build.rs                    # Build script to compile CascLib and link it to the Rust binary
+├── Cargo.toml                  # Rust package metadata and dependencies
 ├── LICENSE          
 └── README.md
 ```

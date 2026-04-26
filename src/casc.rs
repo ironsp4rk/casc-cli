@@ -1,0 +1,280 @@
+mod casclib;
+
+use self::casclib::{CascFindData, CascLib, DefaultCascLib, Handle};
+use std::path::Path;
+use std::ptr;
+
+/// A safe, idiomatic Rust wrapper around a CASC archive.
+///
+/// This struct manages the lifecycle of an underlying `Handle` by leveraging
+/// a `CascLib` implementation. It provides high-level methods to interact
+/// with the archive contents.
+pub struct Archive<L: CascLib = DefaultCascLib> {
+    handle: Handle,
+    lib: L,
+}
+
+impl Archive<DefaultCascLib> {
+    /// Opens a CASC archive at the specified path using the default CASC library wrapper.
+    ///
+    /// # Arguments
+    /// * `path` - A reference to a `Path` where the CASC archive is located.
+    ///
+    /// # Returns
+    /// A `Result` containing the `Archive` instance if successful, or a `String` error message.
+    ///
+    /// # Errors
+    /// Returns an error if the path contains invalid encoding or if the underlying
+    /// library fails to open the storage.
+    #[allow(dead_code)]
+    pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_with_lib(path, DefaultCascLib)
+    }
+}
+
+impl<L: CascLib> Archive<L> {
+    /// Opens a CASC archive at the specified path using a provided `CascLib` implementation.
+    ///
+    /// This method is primarily used for dependency injection in tests where a
+    /// `MockCascLib` is required.
+    ///
+    /// # Arguments
+    /// * `path` - The path to the CASC archive.
+    /// * `lib` - An implementation of the `CascLib` trait.
+    ///
+    /// # Returns
+    /// A `Result` containing the `Archive` instance if successful, or a `String` error message.
+    ///
+    /// # Errors
+    /// Returns an error if the path contains invalid encoding or if the library
+    /// fails to open the storage.
+    pub fn open_with_lib<P: AsRef<Path>>(path: P, lib: L) -> Result<Self, String> {
+        let path_str = path
+            .as_ref()
+            .to_str()
+            .ok_or_else(|| "Invalid path encoding".to_string())?;
+        let c_path = std::ffi::CString::new(path_str).map_err(|e| e.to_string())?;
+
+        let mut handle: Handle = ptr::null_mut();
+        unsafe {
+            if lib.casc_open_storage(c_path.as_ptr(), /* dwLocaleMask= */ 0, &mut handle) {
+                Ok(Archive { handle, lib })
+            } else {
+                Err(format!(
+                    "Failed to open CASC storage at {:?}",
+                    path.as_ref()
+                ))
+            }
+        }
+    }
+
+    /// Returns an iterator over all file paths contained within the CASC archive.
+    ///
+    /// The iterator yields `String` paths representing the internal file structure
+    /// of the archive.
+    ///
+    /// # Returns
+    /// An `ArchiveFileIterator` tied to the lifecycle of this archive.
+    pub fn files(&self) -> ArchiveFileIterator<'_, L> {
+        ArchiveFileIterator::new(self.handle, &self.lib)
+    }
+}
+
+impl<L: CascLib> Drop for Archive<L> {
+    /// Automatically closes the CASC storage handle when the `Archive` goes out of scope.
+    fn drop(&mut self) {
+        unsafe {
+            if !self.handle.is_null() {
+                self.lib.casc_close_storage(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+/// Test mocks for the `Archive` struct.
+pub mod mock {
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    /// Global mutex to synchronize tests that use the static `MockArchive` context.
+    pub static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    mockall::mock! {
+        /// A mock implementation of the `Archive` struct for unit testing.
+        pub Archive {
+            /// Mock for the `open` method.
+            pub fn open(path: &Path) -> Result<Self, String>;
+            /// Mock for the `files` method.
+            pub fn files<'a>(&'a self) -> Box<dyn Iterator<Item = String> + 'a>;
+        }
+    }
+}
+
+/// An iterator that yields the paths of all files in a CASC archive.
+///
+/// This struct manages the `CascFindData` search state and ensures that the
+/// search handle is properly closed via its `Drop` implementation.
+pub struct ArchiveFileIterator<'a, L: CascLib = DefaultCascLib> {
+    find_handle: Handle,
+    find_data: CascFindData,
+    first: bool,
+    done: bool,
+    lib: &'a L,
+}
+
+impl<'a, L: CascLib> ArchiveFileIterator<'a, L> {
+    /// Creates a new `ArchiveFileIterator` for the given storage handle.
+    ///
+    /// # Arguments
+    /// * `storage_handle` - The handle to the opened CASC storage.
+    /// * `lib` - A reference to the `CascLib` implementation used for search calls.
+    fn new(storage_handle: Handle, lib: &'a L) -> Self {
+        let mut find_data: CascFindData = unsafe { std::mem::zeroed() };
+        let mask = std::ffi::CString::new("*").unwrap();
+        let find_handle = unsafe {
+            lib.casc_find_first_file(
+                storage_handle,
+                mask.as_ptr(),
+                &mut find_data,
+                std::ptr::null(),
+            )
+        };
+
+        if find_handle.is_null() {
+            ArchiveFileIterator {
+                find_handle: std::ptr::null_mut(),
+                find_data,
+                first: false,
+                done: true,
+                lib,
+            }
+        } else {
+            ArchiveFileIterator {
+                find_handle,
+                find_data,
+                first: true,
+                done: false,
+                lib,
+            }
+        }
+    }
+
+    /// Extracts the file name from the current `CascFindData` state.
+    ///
+    /// # Returns
+    /// A `String` containing the file path.
+    fn extract_name(&self) -> String {
+        unsafe {
+            std::ffi::CStr::from_ptr(self.find_data.szFileName.as_ptr())
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+}
+
+impl<'a, L: CascLib> Iterator for ArchiveFileIterator<'a, L> {
+    type Item = String;
+
+    /// Advances the iterator and returns the next file path.
+    ///
+    /// # Returns
+    /// `Some(String)` if a file is found, `None` if the iteration is complete.
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        if self.first {
+            self.first = false;
+            return Some(self.extract_name());
+        }
+
+        unsafe {
+            if self
+                .lib
+                .casc_find_next_file(self.find_handle, &mut self.find_data)
+            {
+                Some(self.extract_name())
+            } else {
+                self.done = true;
+                None
+            }
+        }
+    }
+}
+
+impl<'a, L: CascLib> Drop for ArchiveFileIterator<'a, L> {
+    /// Automatically closes the search handle when the iterator goes out of scope.
+    fn drop(&mut self) {
+        unsafe {
+            if !self.find_handle.is_null() {
+                self.lib.casc_find_close(self.find_handle);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::casclib::MockCascLib;
+    use crate::casc::Archive;
+
+    #[test]
+    fn test_open_non_existent_path() {
+        let mut lib = MockCascLib::new();
+        lib.expect_casc_open_storage().times(1).return_const(false);
+
+        let res = Archive::open_with_lib("/non/existent/path", lib);
+        match res {
+            Err(e) => assert!(e.contains("Failed to open CASC storage")),
+            Ok(_) => panic!("Should have failed"),
+        }
+    }
+
+    #[test]
+    fn test_iterate_empty_list() {
+        let mut lib = MockCascLib::new();
+        lib.mock_file_list(vec![]);
+        lib.expect_casc_close_storage().times(1).return_const(true);
+
+        let archive = Archive::open_with_lib("/dummy/path", lib).unwrap();
+        let mut files = archive.files();
+        assert_eq!(files.next(), None);
+    }
+
+    #[test]
+    fn test_iterate_one_file() {
+        let mut lib = MockCascLib::new();
+        lib.mock_file_list(vec!["file1.txt"]);
+        lib.expect_casc_close_storage().times(1).return_const(true);
+        lib.expect_casc_find_close().times(1).return_const(true);
+
+        let archive = Archive::open_with_lib("/dummy/path", lib).unwrap();
+        let mut files = archive.files();
+
+        assert_eq!(files.next(), Some("file1.txt".to_string()));
+        assert_eq!(files.next(), None);
+    }
+
+    #[test]
+    fn test_iterate_many_files() {
+        let mut lib = MockCascLib::new();
+        lib.mock_file_list(vec!["file1.txt", "dir/file2.dat", "another.txt"]);
+        lib.expect_casc_close_storage().times(1).return_const(true);
+        lib.expect_casc_find_close().times(1).return_const(true);
+
+        let archive = Archive::open_with_lib("/dummy/path", lib).unwrap();
+        let files = archive.files();
+
+        let extracted: Vec<String> = files.collect();
+        assert_eq!(
+            extracted,
+            vec![
+                "file1.txt".to_string(),
+                "dir/file2.dat".to_string(),
+                "another.txt".to_string()
+            ]
+        );
+    }
+}

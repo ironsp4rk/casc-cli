@@ -49,15 +49,26 @@ By standard Unix convention, successful operations should be silent in scripting
 
 ## Global Flags
 * `-v, --verbose`: Print detailed output (e.g., list every file path as it is processed). 
-* `-q, --quiet`: Suppress all non-error output. When enabled, the CLI will output absolutely zero bytes unless a fatal, execution-halting error occurs (essential for CI/CD pipelines and shell scripting).
+* `-q, --quiet`: Suppress all non-error output. When enabled, the CLI will output absolutely zero bytes unless a fatal, execution-halting error occurs.
+
+---
+
+## Target Resolution (`[targets...]`)
+Both the `list` and `extract` commands rely on **Targets**. Positional arguments provided *after* the archive directory are treated as targets. The parser iterates through these targets and matches them against the CASC archive's internal paths.
+
+A target can be:
+1. **Exact Matches:** Matches a specific, literal file path (e.g., `data/global/excel/weapons.txt`).
+2. **Directory Namespaces:** If a target ends with a trailing slash (e.g., `data/global/`), the CLI treats it as a namespace prefix and recursively matches all children.
+3. **Glob Patterns:** Native support for standard wildcards (`*`, `?`, `**`). 
+   * *Note: Patterns must be quoted in the terminal (e.g., `'*.txt'`) to prevent the user's shell from expanding them locally before the CLI runs.*
 
 ---
 
 ## Command: List (`list`, `l`)
-Lists the contents of the CASC archive. This command is **recursive by default**. If run on the root, it will list every file in the archive. If a `path_prefix` is provided, it recursively lists all files under that directory.
+Lists the contents of the CASC archive. This command is **recursive by default**. If run without targets, it will list every file in the archive. If targets are provided, it filters the output based on those targets.
 
 **Syntax:**
-`<cli> list <archive_dir> [path_prefix] [flags]`
+`<cli> list <archive_dir> [targets...] [flags]`
 
 **Flags:**
 * `-d, --depth <N>`: Limit the recursion depth. `--depth 1` prints only immediate children.
@@ -65,11 +76,17 @@ Lists the contents of the CASC archive. This command is **recursive by default**
 
 **Global Flag Interactions (List):**
 * **Verbose (`-v`): Detailed View.** Transforms the output from a flat list of paths into a detailed table including metadata (e.g., File Size, Compressed Size, Hash Keys, File Path) similar to the `ls -l` Unix command.
-* **Quiet (`-q`): Validation / Existence Mode.** Suppresses all `stdout`. The command acts purely as a boolean check via the exit code. Useful for scripts to check if an archive is healthy or if a specific file exists without polluting the terminal.
+* **Quiet (`-q`): Validation / Existence Mode.** Suppresses all `stdout`. Acts purely as a boolean check via the exit code `0` (found/healthy) or `1` (missing/corrupted).
 
 **Examples:**
-* `cli l ./Data -v` *(Lists all files with sizes and hash keys)*
-* `cli l ./Data data/global/config.ini -q` *(Prints nothing. Returns exit code `0` if `config.ini` exists, `1` if it does not).*
+* `cli l ./Data` *(Recursive dump of everything)*
+* `cli l ./Data data/global/excel/` *(List everything inside the excel folder)*
+* `cli l ./Data 'data/global/prefix/*'` *(List using a prefix wildcard)*
+* `cli l ./Data '*.txt'` *(List all text files anywhere in the archive)*
+* `cli l ./Data 'data/global/*/more/*.txt'` *(Complex mid-path wildcard matching)*
+* `cli l ./Data data/global/config.ini -q` *(Silent existence check)*
+* `cli l ./Data --depth 1` *(List only root-level files/folders)*
+* `cli l ./Data --tree` *(View archive structure visually)*
 
 ---
 
@@ -83,56 +100,20 @@ Extracts files or directories from the CASC archive.
 * `-o, --output <dir>`: Extract files into a specific directory. Defaults to the current working directory (`./`).
 * `-f, --flatten`: Strip all internal directory structures and extract files directly into the root of the output destination.
 
----
-
-## Target Resolution & Multi-file Design
-Positional arguments provided *after* the archive directory are treated as extraction targets. The parser iterates through these targets and matches them against the CASC archive's internal paths.
-
-1. **Exact Matches:** Matches the specific file path.
-2. **Directory Namespaces:** If a target ends with a trailing slash (e.g., `data/global/`), the CLI treats it as a namespace prefix and recursively matches all children.
-3. **Glob Patterns:** Native support for standard wildcards (`*`, `?`). *Note: Patterns must be quoted in the terminal (e.g., `'*.txt'`).*
+**Examples:**
+* `cli x ./Data data/global/excel/weapons.txt` *(Extract single file)*
+* `cli x ./Data data/global/excel/weapons.txt data/global/excel/armor.txt` *(Extract multiple explicit files)*
+* `cli x ./Data data/global/excel/` *(Extract entire directory tree)*
+* `cli x ./Data 'data/global/excel/*.txt'` *(Extract specific pattern)*
+* `cli x ./Data 'data/global/excel/*.txt' --flatten -o ./extracted_tables` *(Extract pattern, strip internal paths, output to specific local folder)*
 
 ---
 
-## Output Behavior & TTY Detection
-
-To ensure maximum performance and compatibility with Unix pipelines, the CLI handles standard output (`stdout`) and standard error (`stderr`) differently based on the environment and flags:
+## Output Behavior & TTY Detection (Matrix)
 
 | Mode | `stdout` (Standard Output) | `stderr` (Standard Error) |
 | :--- | :--- | :--- |
-| **Interactive TTY (Default)** | Transient progress bar (disappears on completion), followed by a brief final summary (e.g., "Extracted X files in Ys"). | Warnings and fatal errors. |
+| **Interactive TTY (Default)** | Transient progress bar, followed by a brief final summary (e.g., "Extracted X files in Ys"). | Warnings and fatal errors. |
 | **Non-Interactive Script (Default)** | Final summary only. | Warnings and fatal errors. |
-| **Verbose (`-v`)** | Every file path processed, final summary. | Warnings and fatal errors. |
+| **Verbose (`-v`)** | Every file path processed (or detailed table for `list`), final summary. | Warnings and fatal errors. |
 | **Quiet (`-q`)** | *Absolutely nothing.* | **Fatal errors only.** |
-
----
-
-## Core Operations Use Cases
-
-*(In these examples, `./Data` represents the root directory of the split CASC archive on your hard drive).*
-
-### 1. List files (all or folder by folder)
-**Command:** `list` (alias: `l`)
-* **List all files (recursive dump):** `cli l ./Data`
-* **List files inside a specific folder (recursive):** `cli l ./Data data/global/excel/`
-* **List only root-level files/folders:** `cli l ./Data --depth 1`
-* **View archive structure visually:** `cli l ./Data --tree`
-
-### 2. Extract a single file by name/path
-**Command:** `extract` (alias: `x`)
-* **Usage:** `cli x ./Data data/global/excel/weapons.txt`
-
-### 3. Extract multiple files by name/path
-**Command:** `extract` (alias: `x`)
-* **Usage:** `cli x ./Data data/global/excel/weapons.txt data/global/excel/armor.txt`
-
-### 4. Extract all files in a particular directory (with/without mask)
-**Command:** `extract` (alias: `x`)
-* **Extract entire directory tree:** `cli x ./Data data/global/excel/`
-* **Extract specific pattern within a directory:** `cli x ./Data 'data/global/excel/*.txt'`
-
-### 5. Advanced: Flattened Extraction
-**Command:** `extract` (alias: `x`) with `--flatten` (alias: `-f`)
-* **Usage:** `cli x ./Data 'data/global/excel/*.txt' --flatten -o ./extracted_tables`
-  
-  *(Behavior: Scans the CASC storage in `./Data` for all `.txt` files within the internal `excel/` path, strips the `data/global/excel/` folder tree, and dumps the raw `.txt` files directly into your local `./extracted_tables` directory).*

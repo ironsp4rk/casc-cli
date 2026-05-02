@@ -25,6 +25,39 @@ export BINDGEN_EXTRA_CLANG_ARGS="-I$(brew --prefix glibc)/include -I$(brew --pre
 cargo build
 ```
 
+## Usage
+
+### Commands
+
+#### List (`list`, `l`)
+Lists the contents of the CASC archive.
+
+**Syntax:**
+`casc-cli list <archive_dir> [targets...]`
+
+**Examples:**
+* `casc-cli l ./Data` *(List everything)*
+* `casc-cli l ./Data data/global/excel/` *(List everything inside the excel folder)*
+* `casc-cli l ./Data '*.txt'` *(List all text files anywhere)*
+
+### Target Resolution
+Both the `list` and `extract` commands rely on **Targets**. Positional arguments provided after the archive directory are treated as targets.
+
+A target can be:
+1. **Exact Matches:** Matches a specific, literal file path (e.g., `data/global/excel/weapons.txt`).
+2. **Directory Namespaces:** If a target ends with a trailing slash (`/` or `\`), it is treated as a recursive directory prefix.
+3. **Glob Patterns:** Standard wildcards (`*`, `?`, `**`) are supported. The syntax is identical to the one used by [ripgrep](https://github.com/BurntSushi/ripgrep) and `.gitignore` files. See the [full syntax documentation](https://docs.rs/globset/latest/globset/#syntax) for details.
+
+#### Namespace Prefix Omission
+CASC archives often use namespace prefixes (e.g., `data:`). `casc-cli` implements a "dual-matching" strategy that allows you to omit these prefixes in your targets.
+
+For example, a file named `data:locales\data\zhtw\ui\tradestash.dc6` can be matched using any of the following:
+* `data:locales/data/zhtw/ui/tradestash.dc6` (Exact match)
+* `locales/data/zhtw/ui/tradestash.dc6` (Omitted prefix)
+* `locales/data/**/*.dc6` (Glob pattern with omitted prefix)
+
+*Note: Both `\` and `/` are treated identically in target patterns.*
+
 ## Credits & Licensing
 
 `casc-cli` is licensed under the [MIT License](LICENSE).

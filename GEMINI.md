@@ -40,6 +40,9 @@ After making any code changes, always perform the following verification steps:
 2. **Linting:** Run `cargo clippy` to catch common mistakes and improve code quality.
 3. **Testing:** Run `cargo test` to execute unit tests and ensure no regressions.
 
+## Coding Standards & Stule
+* **Documentation**: Always add rustdoc to structs, methods, etc.
+
 # CLI API Specification
 
 ## Design Philosophy

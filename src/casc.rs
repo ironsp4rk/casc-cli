@@ -78,6 +78,39 @@ impl<L: CascLib> Archive<L> {
     pub fn files(&self) -> ArchiveFileIterator<'_, L> {
         ArchiveFileIterator::new(self.handle, &self.lib)
     }
+
+    /// Opens a file within the CASC archive.
+    ///
+    /// # Arguments
+    /// * `name` - The internal path of the file to open.
+    ///
+    /// # Returns
+    /// A `Result` containing the `ArchiveFile` if successful, or a `String` error message.
+    ///
+    /// # Errors
+    /// Returns an error if the file name contains invalid characters or if the
+    /// library fails to open the file.
+    pub fn open_file(&self, name: &str) -> Result<ArchiveFile<'_, L>, String> {
+        let c_name = std::ffi::CString::new(name).map_err(|e| e.to_string())?;
+        let mut file_handle: Handle = ptr::null_mut();
+
+        unsafe {
+            if self.lib.casc_open_file(
+                self.handle,
+                c_name.as_ptr(),
+                /* dwLocaleFlags= */ 0,
+                /* dwOpenFlags= */ 0,
+                &mut file_handle,
+            ) {
+                Ok(ArchiveFile {
+                    handle: file_handle,
+                    lib: &self.lib,
+                })
+            } else {
+                Err(format!("Failed to open file '{}' in archive", name))
+            }
+        }
+    }
 }
 
 impl<L: CascLib> Drop for Archive<L> {
@@ -101,12 +134,64 @@ pub mod mock {
     pub static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     mockall::mock! {
+        /// A mock implementation of the `ArchiveFile` struct for unit testing.
+        pub ArchiveFile {}
+        impl std::io::Read for ArchiveFile {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize>;
+        }
+    }
+
+    mockall::mock! {
         /// A mock implementation of the `Archive` struct for unit testing.
         pub Archive {
             /// Mock for the `open` method.
             pub fn open(path: &Path) -> Result<Self, String>;
             /// Mock for the `files` method.
             pub fn files<'a>(&'a self) -> Box<dyn Iterator<Item = String> + 'a>;
+            /// Mock for the `open_file` method.
+            pub fn open_file(&self, name: &str) -> Result<MockArchiveFile, String>;
+        }
+    }
+}
+
+/// A safe, idiomatic Rust wrapper for an opened file within a CASC archive.
+///
+/// `ArchiveFile` implements `std::io::Read`, allowing it to be used with
+/// any standard Rust I/O utilities. It ensures the underlying file handle
+/// is closed when it goes out of scope.
+pub struct ArchiveFile<'a, L: CascLib = DefaultCascLib> {
+    handle: Handle,
+    lib: &'a L,
+}
+
+impl<'a, L: CascLib> ArchiveFile<'a, L> {}
+
+impl<'a, L: CascLib> std::io::Read for ArchiveFile<'a, L> {
+    /// Reads data from the file into the provided buffer.
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut bytes_read: u32 = 0;
+        unsafe {
+            if self.lib.casc_read_file(
+                self.handle,
+                buf.as_mut_ptr() as *mut std::ffi::c_void,
+                buf.len() as u32,
+                &mut bytes_read,
+            ) {
+                Ok(bytes_read as usize)
+            } else {
+                Err(std::io::Error::other("Failed to read from CASC file"))
+            }
+        }
+    }
+}
+
+impl<'a, L: CascLib> Drop for ArchiveFile<'a, L> {
+    /// Automatically closes the file handle when the `ArchiveFile` goes out of scope.
+    fn drop(&mut self) {
+        unsafe {
+            if !self.handle.is_null() {
+                self.lib.casc_close_file(self.handle);
+            }
         }
     }
 }
@@ -235,6 +320,7 @@ mod tests {
     #[test]
     fn test_iterate_empty_list() {
         let mut lib = MockCascLib::new();
+        lib.mock_open();
         lib.mock_file_list(vec![]);
         lib.expect_casc_close_storage().times(1).return_const(true);
 
@@ -246,6 +332,7 @@ mod tests {
     #[test]
     fn test_iterate_one_file() {
         let mut lib = MockCascLib::new();
+        lib.mock_open();
         lib.mock_file_list(vec!["file1.txt"]);
         lib.expect_casc_close_storage().times(1).return_const(true);
         lib.expect_casc_find_close().times(1).return_const(true);
@@ -260,6 +347,7 @@ mod tests {
     #[test]
     fn test_iterate_many_files() {
         let mut lib = MockCascLib::new();
+        lib.mock_open();
         lib.mock_file_list(vec!["file1.txt", "dir/file2.dat", "another.txt"]);
         lib.expect_casc_close_storage().times(1).return_const(true);
         lib.expect_casc_find_close().times(1).return_const(true);
@@ -276,5 +364,46 @@ mod tests {
                 "another.txt".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_read_file_success() {
+        use super::casclib::MockCascLib;
+        use std::io::Read;
+
+        let mut lib = MockCascLib::new();
+        lib.mock_open();
+        let content = b"Hello, CASC!".to_vec();
+        lib.mock_file_read("test.txt", content.clone(), 100);
+        lib.expect_casc_close_storage().times(1).return_const(true);
+
+        let archive = Archive::open_with_lib("/dummy/path", lib).unwrap();
+        let mut file = archive.open_file("test.txt").unwrap();
+
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, content);
+    }
+
+    #[test]
+    fn test_read_file_chunks() {
+        use super::casclib::MockCascLib;
+        use std::io::Read;
+
+        let mut lib = MockCascLib::new();
+        lib.mock_open();
+        let content = vec![0u8; 100];
+        lib.mock_file_read("large.bin", content.clone(), 101);
+        lib.expect_casc_close_storage().times(1).return_const(true);
+
+        let archive = Archive::open_with_lib("/dummy/path", lib).unwrap();
+        let mut file = archive.open_file("large.bin").unwrap();
+
+        let mut buf = [0u8; 30];
+        assert_eq!(file.read(&mut buf).unwrap(), 30);
+        assert_eq!(file.read(&mut buf).unwrap(), 30);
+        assert_eq!(file.read(&mut buf).unwrap(), 30);
+        assert_eq!(file.read(&mut buf).unwrap(), 10);
+        assert_eq!(file.read(&mut buf).unwrap(), 0);
     }
 }

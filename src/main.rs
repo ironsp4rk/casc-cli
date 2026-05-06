@@ -50,6 +50,24 @@ enum Commands {
         #[arg(verbatim_doc_comment)]
         targets: Vec<String>,
     },
+
+    /// Extract files from the CASC archive.
+    #[command(alias = "x")]
+    Extract {
+        /// Path to the CASC archive directory on the local filesystem.
+        archive_dir: PathBuf,
+
+        /// Targets to extract from the archive.
+        ///
+        /// Targets can be exact paths, directory namespaces (ending in / or \), or glob patterns.
+        ///
+        /// Examples:
+        ///   casc-cli extract ./Data data/global/excel/weapons.txt
+        ///   casc-cli extract ./Data data/global/excel/
+        ///   casc-cli extract ./Data '*.txt'
+        #[arg(verbatim_doc_comment)]
+        targets: Vec<String>,
+    },
 }
 
 /// Main entry point of the application.
@@ -79,6 +97,10 @@ fn run(cli: Cli) -> Result<(), String> {
             archive_dir,
             targets,
         } => commands::list::execute(&archive_dir, &targets),
+        Commands::Extract {
+            archive_dir,
+            targets,
+        } => commands::extract::execute(&archive_dir, &targets),
     }
 }
 
@@ -98,6 +120,7 @@ mod tests {
                 assert_eq!(archive_dir, PathBuf::from("/path/to/archive"));
                 assert_eq!(targets, vec!["target1", "target2"]);
             }
+            _ => panic!("Expected List subcommand"),
         }
     }
 
@@ -112,6 +135,22 @@ mod tests {
                 assert_eq!(archive_dir, PathBuf::from("/path/to/archive"));
                 assert!(targets.is_empty());
             }
+            _ => panic!("Expected List subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_extract() {
+        let cli = Cli::parse_from(["casc-cli", "extract", "/path/to/archive", "target1"]);
+        match cli.command {
+            Commands::Extract {
+                archive_dir,
+                targets,
+            } => {
+                assert_eq!(archive_dir, PathBuf::from("/path/to/archive"));
+                assert_eq!(targets, vec!["target1"]);
+            }
+            _ => panic!("Expected Extract subcommand"),
         }
     }
 

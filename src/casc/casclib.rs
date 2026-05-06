@@ -111,6 +111,62 @@ pub trait CascLib {
     /// # Safety
     /// This function is unsafe as it performs FFI calls with a raw handle.
     unsafe fn casc_find_close(&self, hFind: Handle) -> bool;
+
+    /// Opens a file within a CASC storage.
+    ///
+    /// # Arguments
+    /// * `hStorage` - Handle to an opened CASC storage.
+    /// * `szFileName` - Name of the file to open.
+    /// * `dwLocaleFlags` - Locale flags for the file.
+    /// * `dwOpenFlags` - Open flags for the file.
+    /// * `phFile` - Pointer to receive the opened file handle.
+    ///
+    /// # Returns
+    /// `true` if the file was opened successfully, `false` otherwise.
+    ///
+    /// # Safety
+    /// This function is unsafe as it dereferences raw pointers and performs FFI calls.
+    unsafe fn casc_open_file(
+        &self,
+        hStorage: Handle,
+        szFileName: *const std::ffi::c_char,
+        dwLocaleFlags: u32,
+        dwOpenFlags: u32,
+        phFile: *mut Handle,
+    ) -> bool;
+
+    /// Reads data from a file.
+    ///
+    /// # Arguments
+    /// * `hFile` - Handle to the opened file.
+    /// * `lpBuffer` - Pointer to the buffer to receive the data.
+    /// * `dwToRead` - Number of bytes to read.
+    /// * `pdwRead` - Pointer to receive the number of bytes actually read.
+    ///
+    /// # Returns
+    /// `true` if successful, `false` otherwise.
+    ///
+    /// # Safety
+    /// This function is unsafe as it dereferences raw pointers and performs FFI calls.
+    unsafe fn casc_read_file(
+        &self,
+        hFile: Handle,
+        lpBuffer: *mut std::ffi::c_void,
+        dwToRead: u32,
+        pdwRead: *mut u32,
+    ) -> bool;
+
+    /// Closes an opened file handle.
+    ///
+    /// # Arguments
+    /// * `hFile` - Handle to the file to close.
+    ///
+    /// # Returns
+    /// `true` if the handle was closed successfully, `false` otherwise.
+    ///
+    /// # Safety
+    /// This function is unsafe as it performs FFI calls with a raw handle.
+    unsafe fn casc_close_file(&self, hFile: Handle) -> bool;
 }
 
 /// The default production implementation of `CascLib` that calls the underlying C-FFI functions.
@@ -148,17 +204,59 @@ impl CascLib for DefaultCascLib {
     unsafe fn casc_find_close(&self, hFind: Handle) -> bool {
         bindings::CascFindClose(hFind)
     }
+
+    unsafe fn casc_open_file(
+        &self,
+        hStorage: Handle,
+        szFileName: *const std::ffi::c_char,
+        dwLocaleFlags: u32,
+        dwOpenFlags: u32,
+        phFile: *mut Handle,
+    ) -> bool {
+        bindings::CascOpenFile(
+            hStorage,
+            szFileName as *const std::ffi::c_void,
+            dwLocaleFlags,
+            dwOpenFlags,
+            phFile,
+        )
+    }
+
+    unsafe fn casc_read_file(
+        &self,
+        hFile: Handle,
+        lpBuffer: *mut std::ffi::c_void,
+        dwToRead: u32,
+        pdwRead: *mut u32,
+    ) -> bool {
+        bindings::CascReadFile(hFile, lpBuffer, dwToRead, pdwRead)
+    }
+
+    unsafe fn casc_close_file(&self, hFile: Handle) -> bool {
+        bindings::CascCloseFile(hFile)
+    }
 }
 
 #[cfg(test)]
 impl MockCascLib {
+    /// Helper to mock opening a storage for the `MockCascLib`.
+    ///
+    /// **Verification:** This helper sets a strict expectation (`.times(1)`) for `casc_open_storage`.
+    pub fn mock_open(&mut self) {
+        self.expect_casc_open_storage()
+            .times(1)
+            .returning(|_, _, handle| unsafe {
+                *handle = 1 as Handle;
+                true
+            });
+    }
+
     /// Helper to mock a list of files for the `MockCascLib`.
     ///
     /// It configures the mock to successfully "open" a storage and return the provided list
     /// of files during iteration.
     ///
     /// **Verification:** This helper sets strict expectations (`.times(n)`) for:
-    /// - `casc_open_storage` (exactly once)
     /// - `casc_find_first_file` (exactly once)
     /// - `casc_find_next_file` (exactly once per file + once for termination)
     ///
@@ -166,13 +264,6 @@ impl MockCascLib {
     /// * `files` - A vector of file paths to be "found" in the archive.
     pub fn mock_file_list(&mut self, files: Vec<&'static str>) {
         use std::ptr;
-
-        self.expect_casc_open_storage()
-            .times(1)
-            .returning(|_, _, handle| unsafe {
-                *handle = 1 as Handle;
-                true
-            });
 
         if files.is_empty() {
             self.expect_casc_find_first_file()
@@ -215,5 +306,48 @@ impl MockCascLib {
                     false
                 }
             });
+    }
+
+    /// Helper to mock opening and reading a file for the `MockCascLib`.
+    ///
+    /// This function sets up expectations for:
+    /// * `CascOpenFile`: Verifies the filename matches `name` and is called exactly once.
+    /// * `CascReadFile`: Verifies it is called with the correct file handle.
+    /// * `CascCloseFile`: Verifies it is called with the correct file handle and exactly once.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the file to mock.
+    /// * `content` - The content of the file.
+    /// * `handle` - A unique handle for this file.
+    pub fn mock_file_read(&mut self, name: &'static str, content: Vec<u8>, handle: usize) {
+        self.expect_casc_open_file()
+            .withf(move |_, filename, _, _, _| unsafe {
+                std::ffi::CStr::from_ptr(*filename).to_str().unwrap() == name
+            })
+            .times(1)
+            .returning(move |_, _, _, _, phFile| unsafe {
+                *phFile = handle as Handle;
+                true
+            });
+
+        let mut remaining_content = content;
+        self.expect_casc_read_file()
+            .withf(move |hFile, _, _, _| *hFile == handle as Handle)
+            .returning(move |_, lpBuffer, dwToRead, pdwRead| unsafe {
+                let to_read = std::cmp::min(dwToRead as usize, remaining_content.len());
+                std::ptr::copy_nonoverlapping(
+                    remaining_content.as_ptr(),
+                    lpBuffer as *mut u8,
+                    to_read,
+                );
+                *pdwRead = to_read as u32;
+                remaining_content.drain(0..to_read);
+                true
+            });
+
+        self.expect_casc_close_file()
+            .withf(move |hFile| *hFile == handle as Handle)
+            .times(1)
+            .return_const(true);
     }
 }

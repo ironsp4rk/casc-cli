@@ -6,9 +6,11 @@ use crate::casc::Archive;
 use crate::casc::mock::MockArchive as Archive;
 
 use crate::targets::TargetMatcher;
+use anyhow::{Result, anyhow};
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 /// Executes the extract command for a given CASC archive directory.
 ///
@@ -21,15 +23,15 @@ use std::path::Path;
 /// * `targets` - A slice of target patterns to filter the files for extraction.
 ///
 /// # Returns
-/// A `Result` indicating success (`Ok(())`) or a `String` error message if opening
+/// A `Result` indicating success (`Ok(())`) or an error if opening
 /// the archive or extracting files fails.
 ///
 /// # Errors
 /// Returns an error if the archive at `archive_dir` cannot be opened, if target
 /// patterns are invalid, or if any filesystem operation (creating directories,
 /// creating files, or writing data) fails.
-pub fn execute(archive_dir: &Path, targets: &[String]) -> Result<(), String> {
-    let archive = Archive::open(archive_dir)?;
+pub fn execute(archive_dir: &Path, targets: &[String]) -> Result<()> {
+    let archive = Archive::open(archive_dir).map_err(|e| anyhow!(e))?;
     execute_internal(&archive, targets, Path::new("."), &mut io::stdout())
 }
 
@@ -51,12 +53,18 @@ fn execute_internal<W: io::Write>(
     targets: &[String],
     output_dir: &Path,
     writer: &mut W,
-) -> Result<(), String> {
-    let matcher = TargetMatcher::new(targets)?;
+) -> Result<()> {
+    let matcher = TargetMatcher::new(targets).map_err(|e| anyhow!(e))?;
 
     let mut extracted_count = 0;
+    // 64KB buffer for chunked reading
+    let mut buffer = [0u8; 64 * 1024];
 
     for path in archive.files() {
+        if crate::CANCELLED.load(Ordering::Relaxed) {
+            return Err(anyhow!(crate::AppError::Cancelled("Extraction")));
+        }
+
         if matcher.is_match(&path) {
             // Strip any namespace prefix (e.g., "data:") for local file creation
             let local_path_str = if let Some(colon_idx) = path.find(':') {
@@ -73,32 +81,54 @@ fn execute_internal<W: io::Write>(
             // Create parent directories if they don't exist
             if let Some(parent) = local_path.parent() {
                 fs::create_dir_all(parent).map_err(|e| {
-                    format!("Failed to create directory '{}': {}", parent.display(), e)
+                    anyhow!("Failed to create directory '{}': {}", parent.display(), e)
                 })?;
             }
 
             // Extract the file
-            let mut archive_file = archive.open_file(&path)?;
+            let mut archive_file = archive.open_file(&path).map_err(|e| anyhow!(e))?;
             let mut out_file = fs::File::create(&local_path)
-                .map_err(|e| format!("Failed to create file '{}': {}", local_path.display(), e))?;
+                .map_err(|e| anyhow!("Failed to create file '{}': {}", local_path.display(), e))?;
 
-            io::copy(&mut archive_file, &mut out_file)
-                .map_err(|e| format!("Failed to extract file '{}': {}", path, e))?;
+            // Chunked read/write loop to allow cancellation mid-file
+            loop {
+                if crate::CANCELLED.load(Ordering::Relaxed) {
+                    // Clean up partially written file
+                    drop(out_file);
+                    let _ = fs::remove_file(&local_path);
+                    return Err(anyhow!(crate::AppError::Cancelled("Extraction")));
+                }
 
-            writeln!(writer, "Extracted: {}", path).map_err(|e| e.to_string())?;
+                let bytes_read = archive_file
+                    .read(&mut buffer)
+                    .map_err(|e| anyhow!("Failed to read from archive file '{}': {}", path, e))?;
+
+                if bytes_read == 0 {
+                    break; // EOF
+                }
+
+                out_file.write_all(&buffer[..bytes_read]).map_err(|e| {
+                    anyhow!(
+                        "Failed to write to local file '{}': {}",
+                        local_path.display(),
+                        e
+                    )
+                })?;
+            }
+
+            writeln!(writer, "Extracted: {}", path)?;
             extracted_count += 1;
         }
     }
 
     if extracted_count == 0 && !targets.is_empty() {
-        writeln!(writer, "No files matched the provided targets.").map_err(|e| e.to_string())?;
+        writeln!(writer, "No files matched the provided targets.")?;
     } else if extracted_count > 0 {
         writeln!(
             writer,
             "\nSuccessfully extracted {} files.",
             extracted_count
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     }
 
     Ok(())
@@ -108,6 +138,7 @@ fn execute_internal<W: io::Write>(
 mod tests {
     use super::*;
     use crate::casc::mock::{MockArchiveFile, TEST_MUTEX};
+    use crate::tests::CANCEL_MUTEX;
     use mockall::predicate::eq;
     use std::fs;
     use std::path::Path;
@@ -132,6 +163,8 @@ mod tests {
 
     #[test]
     fn test_execute_internal_happy_path() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
         let mut archive = Archive::default();
         archive
             .expect_files()
@@ -163,6 +196,8 @@ mod tests {
 
     #[test]
     fn test_execute_internal_with_prefix() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
         let mut archive = Archive::default();
         archive
             .expect_files()
@@ -193,6 +228,8 @@ mod tests {
 
     #[test]
     fn test_execute_internal_no_match() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
         let mut archive = Archive::default();
         archive
             .expect_files()
@@ -221,6 +258,8 @@ mod tests {
 
     #[test]
     fn test_execute_internal_multiple_matches() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
         let mut archive = Archive::default();
         archive.expect_files().times(1).returning(|| {
             Box::new(
@@ -266,6 +305,8 @@ mod tests {
 
     #[test]
     fn test_execute_internal_backslash_path() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
         let mut archive = Archive::default();
         archive
             .expect_files()
@@ -296,7 +337,9 @@ mod tests {
 
     #[test]
     fn test_execute_open_failure() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _cancel_lock = CANCEL_MUTEX.lock().unwrap();
+        let _test_lock = TEST_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
         let path = Path::new("/dummy/path");
         let ctx = Archive::open_context();
         ctx.expect()
@@ -305,6 +348,94 @@ mod tests {
             .returning(|_| Err("Mock open failure".to_string()));
 
         let res = execute(path, &[]);
-        assert_eq!(res, Err("Mock open failure".to_string()));
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "Mock open failure");
+    }
+
+    #[test]
+    fn test_execute_internal_cancelled_before() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(true, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .times(1)
+            .returning(|| Box::new(vec!["test.txt".to_string()].into_iter()));
+
+        let temp_dir = Path::new("test_extract_cancel_before");
+        fs::create_dir_all(temp_dir).unwrap();
+
+        let mut output = Vec::new();
+        let res = execute_internal(&archive, &[], temp_dir, &mut output);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        if let Some(app_err) = err.downcast_ref::<crate::AppError>() {
+            match app_err {
+                crate::AppError::Cancelled(op) => assert_eq!(*op, "Extraction"),
+            }
+        } else {
+            panic!("Expected AppError::Cancelled");
+        }
+
+        assert!(output.is_empty());
+        assert!(!temp_dir.join("test.txt").exists());
+
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_cancelled_mid_file() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .times(1)
+            .returning(|| Box::new(vec!["bigfile.bin".to_string()].into_iter()));
+
+        let mut mock_file = MockArchiveFile::default();
+        // Return some data on first read, then we'll cancel
+        mock_file.expect_read().times(1).returning(|buf| {
+            let data = vec![0u8; 1024];
+            buf[..1024].copy_from_slice(&data);
+            crate::CANCELLED.store(true, Ordering::SeqCst);
+            Ok(1024)
+        });
+
+        let mock_file_opt = Mutex::new(Some(mock_file));
+        archive
+            .expect_open_file()
+            .with(eq("bigfile.bin"))
+            .times(1)
+            .returning(move |_| {
+                Ok(mock_file_opt
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("Called open_file twice"))
+            });
+
+        let temp_dir = Path::new("test_extract_cancel_mid");
+        fs::create_dir_all(temp_dir).unwrap();
+
+        let mut output = Vec::new();
+        let res = execute_internal(&archive, &[], temp_dir, &mut output);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        if let Some(app_err) = err.downcast_ref::<crate::AppError>() {
+            match app_err {
+                crate::AppError::Cancelled(op) => assert_eq!(*op, "Extraction"),
+            }
+        } else {
+            panic!("Expected AppError::Cancelled");
+        }
+
+        // Partial file should have been deleted
+        assert!(!temp_dir.join("bigfile.bin").exists());
+
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 }
+

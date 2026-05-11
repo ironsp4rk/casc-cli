@@ -8,8 +8,33 @@ mod casc;
 mod commands;
 mod targets;
 
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Internal debug flag to enable verbose error output during development.
+const DEBUG: bool = false;
+
+/// Application-specific error types.
+#[derive(Debug)]
+pub enum AppError {
+    /// Operation was cancelled by the user (e.g., via Ctrl+C).
+    Cancelled(&'static str),
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppError::Cancelled(op) => write!(f, "{} cancelled by user", op),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
+/// Global cancellation flag. Set to true on SIGINT (Ctrl+C).
+pub static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Command-line argument structure for the `casc-cli` application.
 #[derive(Parser)]
@@ -74,11 +99,44 @@ enum Commands {
 ///
 /// Parses the command-line arguments and invokes the primary execution handler.
 fn main() {
+    // Set up the global signal handler for Ctrl+C.
+    ctrlc::set_handler(move || {
+        CANCELLED.store(true, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
+
     let cli = Cli::parse();
     if let Err(e) = run(cli) {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
+        std::process::exit(handle_error(e));
     }
+}
+
+/// Handles an application error and returns the appropriate exit code.
+///
+/// Broken pipe errors and user cancellations are handled gracefully by returning
+/// an exit code of 0. All other errors result in an exit code of 1.
+fn handle_error(e: anyhow::Error) -> i32 {
+    // Attempt to downcast the error to an `std::io::Error` to check for BrokenPipe.
+    if let Some(io_err) = e.downcast_ref::<std::io::Error>()
+        && io_err.kind() == std::io::ErrorKind::BrokenPipe
+    {
+        return 0;
+    }
+
+    // Check for structured application errors (e.g., Cancellation).
+    if let Some(app_err) = e.downcast_ref::<AppError>() {
+        match app_err {
+            AppError::Cancelled(_) => {
+                if DEBUG {
+                    eprintln!("Debug: {}", e);
+                }
+                return 0;
+            }
+        }
+    }
+
+    eprintln!("Error: {}", e);
+    1
 }
 
 /// Primary execution handler that dispatches work based on the parsed CLI command.
@@ -87,11 +145,11 @@ fn main() {
 /// * `cli` - The parsed `Cli` arguments.
 ///
 /// # Returns
-/// A `Result` indicating success (`Ok(())`) or a `String` error message.
+/// A `Result` indicating success (`Ok(())`) or an error.
 ///
 /// # Errors
 /// Returns an error if the requested subcommand fails to execute.
-fn run(cli: Cli) -> Result<(), String> {
+fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::List {
             archive_dir,
@@ -105,9 +163,36 @@ fn run(cli: Cli) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use clap::CommandFactory;
+    use std::sync::Mutex;
+
+    /// Global mutex to synchronize tests that interact with the `CANCELLED` flag.
+    pub static CANCEL_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_handle_error_broken_pipe() {
+        let err = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "Broken pipe",
+        ));
+        assert_eq!(handle_error(err), 0);
+    }
+
+    #[test]
+    fn test_handle_error_other() {
+        let err = anyhow::Error::msg("Some other error");
+        assert_eq!(handle_error(err), 1);
+    }
+
+    #[test]
+    fn test_handle_error_cancellation() {
+        let err = anyhow::Error::new(AppError::Cancelled("Listing"));
+        assert_eq!(handle_error(err), 0);
+        let err = anyhow::Error::new(AppError::Cancelled("Extraction"));
+        assert_eq!(handle_error(err), 0);
+    }
 
     #[test]
     fn test_cli_parsing_list() {

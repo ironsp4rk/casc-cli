@@ -16,11 +16,12 @@ use std::sync::atomic::Ordering;
 ///
 /// This function opens the CASC archive located at `archive_dir`, matches internal
 /// file paths against the provided `targets`, and extracts matching files to the
-/// current directory while preserving their internal path structure.
+/// `output_dir` while preserving their internal path structure.
 ///
 /// # Arguments
 /// * `archive_dir` - A reference to the `Path` of the CASC archive directory.
 /// * `targets` - A slice of target patterns to filter the files for extraction.
+/// * `output_dir` - The base local directory where files should be extracted.
 ///
 /// # Returns
 /// A `Result` indicating success (`Ok(())`) or an error if opening
@@ -30,15 +31,15 @@ use std::sync::atomic::Ordering;
 /// Returns an error if the archive at `archive_dir` cannot be opened, if target
 /// patterns are invalid, or if any filesystem operation (creating directories,
 /// creating files, or writing data) fails.
-pub fn execute(archive_dir: &Path, targets: &[String]) -> Result<()> {
+pub fn execute(archive_dir: &Path, targets: &[String], output_dir: &Path) -> Result<()> {
     let archive = Archive::open(archive_dir).map_err(|e| anyhow!(e))?;
-    execute_internal(&archive, targets, Path::new("."), &mut io::stdout())
+    execute_internal(&archive, targets, output_dir, &mut io::stdout())
 }
 
-/// Internal execution handler allowing injection of the output directory and writer for testing.
+/// Internal execution handler allowing injection of the writer and archive for testing.
 ///
 /// This separation allows unit tests to verify the extraction logic and output
-/// without interacting with the real `stdout` or the current working directory.
+/// without interacting with the real `stdout` or the `Archive::open`.
 ///
 /// # Arguments
 /// * `archive` - A reference to the `Archive` instance (or its mock).
@@ -347,9 +348,52 @@ mod tests {
             .times(1)
             .returning(|_| Err("Mock open failure".to_string()));
 
-        let res = execute(path, &[]);
+        let res = execute(path, &[], Path::new("."));
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "Mock open failure");
+    }
+
+    #[test]
+    fn test_execute_internal_invalid_output_dir() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .returning(|| Box::new(vec!["test.txt".to_string()].into_iter()));
+
+        // Create a file where a directory should be
+        let temp_file = Path::new("test_extract_invalid_dir");
+        fs::write(temp_file, "not a directory").unwrap();
+
+        let mut output = Vec::new();
+        let res = execute_internal(&archive, &[], temp_file, &mut output);
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("Not a directory") || err_msg.contains("exists"));
+
+        fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_empty_output_dir() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .returning(|| Box::new(vec!["test.txt".to_string()].into_iter()));
+        archive
+            .expect_open_file()
+            .returning(|_| Ok(mock_file(b"hello".to_vec())));
+
+        // Empty path should join to the relative file path, effectively extracting to CWD
+        let mut output = Vec::new();
+        let res = execute_internal(&archive, &[], Path::new(""), &mut output);
+        assert!(res.is_ok());
+
+        assert!(Path::new("test.txt").exists());
+        fs::remove_file("test.txt").unwrap();
     }
 
     #[test]
@@ -438,4 +482,3 @@ mod tests {
         fs::remove_dir_all(temp_dir).unwrap();
     }
 }
-

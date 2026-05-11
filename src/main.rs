@@ -92,6 +92,10 @@ enum Commands {
         ///   casc-cli extract ./Data '*.txt'
         #[arg(verbatim_doc_comment)]
         targets: Vec<String>,
+
+        /// Output directory where files will be extracted.
+        #[arg(short = 'o', long = "output", default_value = ".")]
+        output: PathBuf,
     },
 }
 
@@ -158,7 +162,8 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Extract {
             archive_dir,
             targets,
-        } => commands::extract::execute(&archive_dir, &targets),
+            output,
+        } => commands::extract::execute(&archive_dir, &targets, &output),
     }
 }
 
@@ -231,9 +236,11 @@ pub mod tests {
             Commands::Extract {
                 archive_dir,
                 targets,
+                output,
             } => {
                 assert_eq!(archive_dir, PathBuf::from("/path/to/archive"));
                 assert_eq!(targets, vec!["target1"]);
+                assert_eq!(output, PathBuf::from("."));
             }
             _ => panic!("Expected Extract subcommand"),
         }

@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn test_matcher_empty_targets() {
-        let matcher = TargetMatcher::new(&[]).unwrap();
+        let matcher = TargetMatcher::new(/* targets= */ &[]).unwrap();
         assert!(matcher.is_match("any/path.txt"));
         assert!(matcher.is_match("data:another\\path.dat"));
     }

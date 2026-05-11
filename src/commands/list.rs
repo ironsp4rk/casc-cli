@@ -51,7 +51,9 @@ fn execute_internal<W: Write>(archive: &Archive, targets: &[String], writer: &mu
     for file in archive.files() {
         // Exit early if the user pressed Ctrl+C
         if crate::CANCELLED.load(Ordering::Relaxed) {
-            return Err(anyhow!(crate::AppError::Cancelled("Listing")));
+            return Err(anyhow!(crate::AppError::Cancelled(
+                /* op= */ "Listing"
+            )));
         }
 
         if !matcher.is_match(&file) {
@@ -85,7 +87,7 @@ mod tests {
             .times(1)
             .returning(|_| Err("Mock open failure".to_string()));
 
-        let res = execute(path, &[]);
+        let res = execute(path, /* targets= */ &[]);
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "Mock open failure");
     }
@@ -105,7 +107,7 @@ mod tests {
             Ok(a)
         });
 
-        let res = execute(path, &[]);
+        let res = execute(path, /* targets= */ &[]);
         assert!(res.is_ok());
     }
 
@@ -120,7 +122,7 @@ mod tests {
             .returning(|| Box::new(std::iter::empty()));
 
         let mut output = Vec::new();
-        let res = execute_internal(&archive, &[], &mut output);
+        let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_ok());
         assert!(output.is_empty());
@@ -137,7 +139,7 @@ mod tests {
             .returning(|| Box::new(vec!["only_one.txt".to_string()].into_iter()));
 
         let mut output = Vec::new();
-        let res = execute_internal(&archive, &[], &mut output);
+        let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_ok());
         assert_eq!(String::from_utf8(output).unwrap(), "only_one.txt\n");
@@ -183,7 +185,7 @@ mod tests {
         });
 
         let mut output = Vec::new();
-        let res = execute_internal(&archive, &[], &mut output);
+        let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_ok());
         let result_str = String::from_utf8(output).unwrap();
@@ -214,7 +216,7 @@ mod tests {
             .returning(|| Box::new(vec!["file1.txt".to_string()].into_iter()));
 
         let mut output = BrokenPipeWriter;
-        let res = execute_internal(&archive, &[], &mut output);
+        let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         // BrokenPipe error will now be returned up the chain.
         assert!(res.is_err());
@@ -250,7 +252,7 @@ mod tests {
             .returning(|| Box::new(vec!["file1.txt".to_string()].into_iter()));
 
         let mut output = FailingWriter;
-        let res = execute_internal(&archive, &[], &mut output);
+        let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "Some other error");
@@ -267,7 +269,7 @@ mod tests {
 
         crate::CANCELLED.store(true, Ordering::SeqCst);
         let mut output = Vec::new();
-        let res = execute_internal(&archive, &[], &mut output);
+        let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_err());
         let err = res.unwrap_err();

@@ -80,7 +80,9 @@ fn execute_internal<W1: io::Write, W2: io::Write>(
 
     for path in archive.files() {
         if crate::CANCELLED.load(Ordering::Relaxed) {
-            return Err(anyhow!(crate::AppError::Cancelled("Extraction")));
+            return Err(anyhow!(crate::AppError::Cancelled(
+                /* op= */ "Extraction"
+            )));
         }
 
         if matcher.is_match(&path) {
@@ -134,7 +136,9 @@ fn execute_internal<W1: io::Write, W2: io::Write>(
                     // Clean up partially written file
                     drop(out_file);
                     let _ = fs::remove_file(&local_path);
-                    return Err(anyhow!(crate::AppError::Cancelled("Extraction")));
+                    return Err(anyhow!(crate::AppError::Cancelled(
+                        /* op= */ "Extraction"
+                    )));
                 }
 
                 let bytes_read = archive_file
@@ -221,7 +225,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -262,7 +266,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -297,7 +301,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &["matching.txt".to_string()],
+            /* targets= */ &["matching.txt".to_string()],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -348,7 +352,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &["*.txt".to_string()],
+            /* targets= */ &["*.txt".to_string()],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -390,7 +394,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -420,7 +424,12 @@ mod tests {
             .times(1)
             .returning(|_| Err("Mock open failure".to_string()));
 
-        let res = execute(path, &[], Path::new("."), false);
+        let res = execute(
+            path,
+            /* targets= */ &[],
+            Path::new("."),
+            /* flatten= */ false,
+        );
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "Mock open failure");
     }
@@ -442,7 +451,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_file,
             &mut stdout,
             &mut stderr,
@@ -472,7 +481,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             Path::new(""),
             &mut stdout,
             &mut stderr,
@@ -501,7 +510,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -563,7 +572,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -627,7 +636,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -677,7 +686,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,
@@ -744,7 +753,7 @@ mod tests {
         let mut stderr = Vec::new();
         let res = execute_internal(
             &archive,
-            &[],
+            /* targets= */ &[],
             temp_dir,
             &mut stdout,
             &mut stderr,

@@ -198,9 +198,9 @@ pub mod tests {
 
     #[test]
     fn test_handle_error_cancellation() {
-        let err = anyhow::Error::new(AppError::Cancelled("Listing"));
+        let err = anyhow::Error::new(AppError::Cancelled(/* op= */ "Listing"));
         assert_eq!(handle_error(err), 0);
-        let err = anyhow::Error::new(AppError::Cancelled("Extraction"));
+        let err = anyhow::Error::new(AppError::Cancelled(/* op= */ "Extraction"));
         assert_eq!(handle_error(err), 0);
     }
 

@@ -222,7 +222,7 @@ impl<'a, L: CascLib> ArchiveFileIterator<'a, L> {
                 storage_handle,
                 mask.as_ptr(),
                 &mut find_data,
-                std::ptr::null(),
+                /* szListFile= */ std::ptr::null(),
             )
         };
 
@@ -374,7 +374,11 @@ mod tests {
         let mut lib = MockCascLib::new();
         lib.mock_open();
         let content = b"Hello, CASC!".to_vec();
-        lib.mock_file_read("test.txt", content.clone(), 100);
+        lib.mock_file_read(
+            /* name= */ "test.txt",
+            content.clone(),
+            /* handle= */ 100,
+        );
         lib.expect_casc_close_storage().times(1).return_const(true);
 
         let archive = Archive::open_with_lib("/dummy/path", lib).unwrap();
@@ -393,7 +397,11 @@ mod tests {
         let mut lib = MockCascLib::new();
         lib.mock_open();
         let content = vec![0u8; 100];
-        lib.mock_file_read("large.bin", content.clone(), 101);
+        lib.mock_file_read(
+            /* name= */ "large.bin",
+            content.clone(),
+            /* handle= */ 101,
+        );
         lib.expect_casc_close_storage().times(1).return_const(true);
 
         let archive = Archive::open_with_lib("/dummy/path", lib).unwrap();

@@ -65,7 +65,7 @@ enum Commands {
         /// Note: CASC archives often use namespace prefixes (e.g., `data:`). You can omit these prefixes
         /// in your targets, and the tool will automatically attempt to match the path without it.
         ///
-        /// Full syntax documentation: https://docs.rs/globset/latest/globset/#syntax
+        /// Full syntax documentation: <https://docs.rs/globset/latest/globset/#syntax>
         ///
         /// Examples:
         ///   casc-cli list ./Data                           (List all files)
@@ -96,6 +96,10 @@ enum Commands {
         /// Output directory where files will be extracted.
         #[arg(short = 'o', long = "output", default_value = ".")]
         output: PathBuf,
+
+        /// Strip internal directory structures and extract all files directly into the root of the output directory.
+        #[arg(short = 'f', long = "flatten")]
+        flatten: bool,
     },
 }
 
@@ -163,7 +167,8 @@ fn run(cli: Cli) -> Result<()> {
             archive_dir,
             targets,
             output,
-        } => commands::extract::execute(&archive_dir, &targets, &output),
+            flatten,
+        } => commands::extract::execute(&archive_dir, &targets, &output, flatten),
     }
 }
 
@@ -237,10 +242,12 @@ pub mod tests {
                 archive_dir,
                 targets,
                 output,
+                flatten,
             } => {
                 assert_eq!(archive_dir, PathBuf::from("/path/to/archive"));
                 assert_eq!(targets, vec!["target1"]);
                 assert_eq!(output, PathBuf::from("."));
+                assert!(!flatten);
             }
             _ => panic!("Expected Extract subcommand"),
         }

@@ -85,11 +85,18 @@ enum Commands {
         /// Targets to extract from the archive.
         ///
         /// Targets can be exact paths, directory namespaces (ending in / or \), or glob patterns.
+        /// The glob syntax is identical to the one used by `ripgrep` and `gitignore` files.
+        ///
+        /// Note: CASC archives often use namespace prefixes (e.g., `data:`). You can omit these prefixes
+        /// in your targets, and the tool will automatically attempt to match the path without it.
+        ///
+        /// Full syntax documentation: <https://docs.rs/globset/latest/globset/#syntax>
         ///
         /// Examples:
         ///   casc-cli extract ./Data data/global/excel/weapons.txt
         ///   casc-cli extract ./Data data/global/excel/
         ///   casc-cli extract ./Data '*.txt'
+        ///   casc-cli extract ./Data 'data/global/**/*.txt'
         #[arg(verbatim_doc_comment)]
         targets: Vec<String>,
 

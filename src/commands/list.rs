@@ -13,9 +13,8 @@ use std::sync::atomic::Ordering;
 
 /// Executes the list command for a given CASC archive directory.
 ///
-/// This function opens the CASC archive located at `archive_dir`, iterates
-/// through all contained files, and prints their internal paths to standard output,
-/// optionally filtered by `targets`.
+/// This function opens the CASC archive located at `archive_dir`, matches internal
+/// file paths against the provided `targets`, and prints matching paths to standard output.
 ///
 /// # Arguments
 /// * `archive_dir` - A reference to the `Path` of the CASC archive directory.
@@ -26,8 +25,8 @@ use std::sync::atomic::Ordering;
 /// the archive or printing fails.
 ///
 /// # Errors
-/// Returns an error if the archive at `archive_dir` cannot be opened or if
-/// there is an issue writing to standard output.
+/// Returns an error if the archive at `archive_dir` cannot be opened, if target
+/// patterns are invalid, or if there is an issue writing to standard output.
 pub fn execute(archive_dir: &Path, targets: &[String]) -> Result<()> {
     let archive = Archive::open(archive_dir).map_err(|e| anyhow!(e))?;
     execute_internal(&archive, targets, &mut std::io::stdout())
@@ -235,10 +234,7 @@ mod tests {
         struct FailingWriter;
         impl Write for FailingWriter {
             fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Some other error",
-                ))
+                Err(std::io::Error::other("Some other error"))
             }
             fn flush(&mut self) -> std::io::Result<()> {
                 Ok(())

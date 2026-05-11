@@ -70,8 +70,7 @@ impl<L: CascLib> Archive<L> {
 
     /// Returns an iterator over all file paths contained within the CASC archive.
     ///
-    /// The iterator yields `String` paths representing the internal file structure
-    /// of the archive.
+    /// The iterator yields `String` paths representing every file in the storage.
     ///
     /// # Returns
     /// An `ArchiveFileIterator` tied to the lifecycle of this archive.

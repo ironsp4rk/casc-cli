@@ -27,19 +27,13 @@ use std::sync::atomic::Ordering;
 /// * `flatten` - If true, strips internal directory structure and extracts all files to the root of `output_dir`.
 ///
 /// # Returns
-/// A `Result` indicating success (`Ok(())`) or an error if opening
-/// the archive or extracting files fails.
-///
-/// # Errors
-/// Returns an error if the archive at `archive_dir` cannot be opened, if target
-/// patterns are invalid, or if any filesystem operation (creating directories,
-/// creating files, or writing data) fails.
+/// A `Result` containing the exit code or an error message.
 pub fn execute(
     archive_dir: &Path,
     targets: &[String],
     output_dir: &Path,
     flatten: bool,
-) -> Result<()> {
+) -> Result<i32> {
     let archive = Archive::open(archive_dir).map_err(|e| anyhow!(e))?;
     execute_internal(
         &archive,
@@ -61,7 +55,7 @@ pub fn execute(
 /// * `stderr` - A mutable reference to a type implementing `io::Write` (e.g., `stderr` or a `Vec<u8>`).
 ///
 /// # Returns
-/// A `Result` indicating success or an error message.
+/// A `Result` containing the exit code or an error message.
 fn execute_internal<W1: io::Write, W2: io::Write>(
     archive: &Archive,
     targets: &[String],
@@ -69,14 +63,9 @@ fn execute_internal<W1: io::Write, W2: io::Write>(
     stdout: &mut W1,
     stderr: &mut W2,
     flatten: bool,
-) -> Result<()> {
+) -> Result<i32> {
     let matcher = TargetMatcher::new(targets).map_err(|e| anyhow!(e))?;
-
-    let mut extracted_count = 0;
-    // Tracks base filenames extracted in this session to detect collisions when flattening
-    let mut extracted_filenames = HashSet::new();
-    // 64KB buffer for chunked reading
-    let mut buffer = [0u8; 64 * 1024];
+    let mut extractor = Extractor::new(archive, output_dir, flatten);
 
     for path in archive.files() {
         if crate::CANCELLED.load(Ordering::Relaxed) {
@@ -86,94 +75,235 @@ fn execute_internal<W1: io::Write, W2: io::Write>(
         }
 
         if matcher.is_match(&path) {
-            // Strip any namespace prefix (e.g., "data:") for local file creation
-            let local_path_str = if let Some(colon_idx) = path.find(':') {
-                &path[colon_idx + 1..]
-            } else {
-                &path
-            };
+            writeln!(stdout, "Extracting {}", path)?;
 
-            // Normalize slashes for the local filesystem
-            let local_path_normalized = local_path_str.replace('\\', "/");
-            let local_path_relative = Path::new(&local_path_normalized);
-
-            let local_path = if flatten {
-                let filename = local_path_relative
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .ok_or_else(|| anyhow!("Failed to extract filename from path: {}", path))?;
-
-                if extracted_filenames.contains(filename) {
-                    writeln!(
-                        stderr,
-                        "WARN: Flatten collision for '{}'. Skipping subsequent match from '{}'.",
-                        filename, path
-                    )?;
-                    continue;
+            match extractor.extract_path(&path, stderr) {
+                Ok(_) => {}
+                Err(e) => {
+                    if let Some(app_err) = e.downcast_ref::<crate::AppError>()
+                        && matches!(app_err, crate::AppError::Cancelled(_))
+                    {
+                        return Err(e);
+                    }
+                    writeln!(stderr, "{}", e)?;
                 }
-
-                extracted_filenames.insert(filename.to_string());
-                output_dir.join(filename)
-            } else {
-                output_dir.join(local_path_relative)
-            };
-
-            // Create parent directories if they don't exist
-            if let Some(parent) = local_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    anyhow!("Failed to create directory '{}': {}", parent.display(), e)
-                })?;
             }
-
-            // Extract the file
-            let mut archive_file = archive.open_file(&path).map_err(|e| anyhow!(e))?;
-            let mut out_file = fs::File::create(&local_path)
-                .map_err(|e| anyhow!("Failed to create file '{}': {}", local_path.display(), e))?;
-
-            // Chunked read/write loop to allow cancellation mid-file
-            loop {
-                if crate::CANCELLED.load(Ordering::Relaxed) {
-                    // Clean up partially written file
-                    drop(out_file);
-                    let _ = fs::remove_file(&local_path);
-                    return Err(anyhow!(crate::AppError::Cancelled(
-                        /* op= */ "Extraction"
-                    )));
-                }
-
-                let bytes_read = archive_file
-                    .read(&mut buffer)
-                    .map_err(|e| anyhow!("Failed to read from archive file '{}': {}", path, e))?;
-
-                if bytes_read == 0 {
-                    break; // EOF
-                }
-
-                out_file.write_all(&buffer[..bytes_read]).map_err(|e| {
-                    anyhow!(
-                        "Failed to write to local file '{}': {}",
-                        local_path.display(),
-                        e
-                    )
-                })?;
-            }
-
-            writeln!(stdout, "Extracted: {}", path)?;
-            extracted_count += 1;
         }
     }
 
-    if extracted_count == 0 && !targets.is_empty() {
-        writeln!(stdout, "No files matched the provided targets.")?;
-    } else if extracted_count > 0 {
-        writeln!(
-            stdout,
-            "\nSuccessfully extracted {} files.",
-            extracted_count
-        )?;
+    if extractor.extracted_count == 0 && extractor.skipped_count == 0 && extractor.failed_count == 0
+    {
+        writeln!(stdout, "No matches.")?;
+    } else {
+        write!(stdout, "Extracted {} files", extractor.extracted_count)?;
+        if extractor.skipped_count > 0 || extractor.failed_count > 0 {
+            write!(stdout, " (")?;
+            if extractor.skipped_count > 0 {
+                write!(stdout, "{} skipped", extractor.skipped_count)?;
+                if extractor.failed_count > 0 {
+                    write!(stdout, ", ")?;
+                }
+            }
+            if extractor.failed_count > 0 {
+                write!(stdout, "{} failed", extractor.failed_count)?;
+            }
+            write!(stdout, ")")?;
+        }
+        writeln!(stdout, ".")?;
     }
 
-    Ok(())
+    if extractor.failed_count > 0 {
+        Ok(3)
+    } else if extractor.skipped_count > 0 {
+        Ok(2)
+    } else if extractor.extracted_count == 0 && !targets.is_empty() {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
+
+/// Encapsulates the state and logic for extracting files from a CASC archive.
+///
+/// The `Extractor` manages the session state, including the set of files already extracted
+/// (to prevent collisions when flattening) and the statistics counters. It also owns
+/// a reusable 64KB I/O buffer to minimize allocations during the extraction process.
+struct Extractor<'a> {
+    /// Reference to the opened CASC archive.
+    archive: &'a Archive,
+    /// The base directory for extraction on the local filesystem.
+    output_dir: &'a Path,
+    /// Whether to strip internal directory structures.
+    flatten: bool,
+    /// Total number of files successfully extracted in this session.
+    extracted_count: usize,
+    /// Total number of files skipped due to intra-session conflicts (flatten collisions).
+    skipped_count: usize,
+    /// Total number of files that failed to be extracted.
+    failed_count: usize,
+    /// Set of filenames (base names) already extracted, used for collision detection when flattening.
+    extracted_filenames: HashSet<String>,
+    /// Reusable 64KB buffer for chunked reading and writing.
+    buffer: [u8; 64 * 1024],
+}
+
+impl<'a> Extractor<'a> {
+    /// Creates a new `Extractor` instance for the given archive and output directory.
+    fn new(archive: &'a Archive, output_dir: &'a Path, flatten: bool) -> Self {
+        Self {
+            archive,
+            output_dir,
+            flatten,
+            extracted_count: 0,
+            skipped_count: 0,
+            failed_count: 0,
+            extracted_filenames: HashSet::new(),
+            buffer: [0u8; 64 * 1024],
+        }
+    }
+
+    /// Processes a single archive path, matching it against targets and extracting it if necessary.
+    ///
+    /// This method handles path normalization, collision detection (when flattening),
+    /// and directory creation. If an extraction error occurs, it is logged to `stderr`
+    /// and any partially written file is cleaned up, but the loop continues unless
+    /// the error is a user cancellation.
+    ///
+    /// # Arguments
+    /// * `path` - The internal path of the file within the CASC archive.
+    /// * `stderr` - A mutable reference to a writer for error messages.
+    ///
+    /// # Returns
+    /// A `Result` indicating success (extraction finished or skipped) or a fatal error (e.g., cancellation).
+    fn extract_path<W: io::Write>(&mut self, path: &str, stderr: &mut W) -> Result<()> {
+        // Strip any namespace prefix (e.g., "data:") for local file creation
+        let local_path_str = if let Some(colon_idx) = path.find(':') {
+            &path[colon_idx + 1..]
+        } else {
+            path
+        };
+
+        // Normalize slashes for the local filesystem
+        let local_path_normalized = local_path_str.replace('\\', "/");
+        let local_path_relative = Path::new(&local_path_normalized);
+
+        let local_path = if self.flatten {
+            let filename = match local_path_relative.file_name().and_then(|f| f.to_str()) {
+                Some(f) => f,
+                None => {
+                    writeln!(
+                        stderr,
+                        "ERROR: Failed to extract filename from path: {}",
+                        path
+                    )?;
+                    self.failed_count += 1;
+                    return Ok(());
+                }
+            };
+
+            if self.extracted_filenames.contains(filename) {
+                writeln!(stderr, "WARN: Skipped '{}' (Conflict/Exists)", path)?;
+                self.skipped_count += 1;
+                return Ok(());
+            }
+
+            self.extracted_filenames.insert(filename.to_string());
+            self.output_dir.join(filename)
+        } else {
+            self.output_dir.join(local_path_relative)
+        };
+
+        // Create parent directories if they don't exist
+        if let Some(parent) = local_path.parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            writeln!(
+                stderr,
+                "ERROR: Failed to create directory '{}': {}",
+                parent.display(),
+                e
+            )?;
+            self.failed_count += 1;
+            return Ok(());
+        }
+
+        // Extract the actual file
+        match self.extract_file(path, &local_path) {
+            Ok(_) => {
+                self.extracted_count += 1;
+                Ok(())
+            }
+            Err(e) => {
+                // If it's a cancellation, we pass it up to stop the entire loop
+                if let Some(app_err) = e.downcast_ref::<crate::AppError>()
+                    && matches!(app_err, crate::AppError::Cancelled(_))
+                {
+                    return Err(e);
+                }
+                // Otherwise, log and continue
+                self.failed_count += 1;
+                let _ = fs::remove_file(&local_path);
+                Err(e)
+            }
+        }
+    }
+
+    /// Performs the low-level extraction of a single file.
+    ///
+    /// Opens the file in the archive, creates the local file, and copies the data
+    /// in chunks. Checks for user cancellation between each chunk.
+    ///
+    /// # Arguments
+    /// * `path` - The internal path of the file in the archive.
+    /// * `local_path` - The absolute or relative path where the file should be written locally.
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or an `Err` if opening, reading, or writing fails.
+    fn extract_file(&mut self, path: &str, local_path: &Path) -> Result<()> {
+        let mut archive_file = self.archive.open_file(path).map_err(|e| {
+            let code = self.archive.get_error();
+            anyhow!(
+                "Extraction failure (code: {}) for '{}' (open): {}",
+                code,
+                path,
+                e
+            )
+        })?;
+
+        let mut out_file = fs::File::create(local_path)
+            .map_err(|e| anyhow!("Extraction failure for '{}' (create): {}", path, e))?;
+
+        // Chunked read/write loop to allow cancellation mid-file
+        loop {
+            if crate::CANCELLED.load(Ordering::Relaxed) {
+                // Clean up partially written file
+                drop(out_file);
+                let _ = fs::remove_file(local_path);
+                return Err(anyhow!(crate::AppError::Cancelled(
+                    /* op= */ "Extraction"
+                )));
+            }
+
+            let bytes_read = archive_file.read(&mut self.buffer).map_err(|e| {
+                let code = self.archive.get_error();
+                anyhow!(
+                    "Extraction failure (code: {}) for '{}' (read): {}",
+                    code,
+                    path,
+                    e
+                )
+            })?;
+
+            if bytes_read == 0 {
+                break; // EOF
+            }
+
+            out_file
+                .write_all(&self.buffer[..bytes_read])
+                .map_err(|e| anyhow!("Extraction failure for '{}' (write): {}", path, e))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -232,14 +362,15 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
 
         let extracted_file = temp_dir.join("test.txt");
         assert!(extracted_file.exists());
         assert_eq!(fs::read_to_string(extracted_file).unwrap(), "hello");
 
         let output_str = String::from_utf8(stdout).unwrap();
-        assert!(output_str.contains("Extracted: test.txt"));
-        assert!(output_str.contains("Successfully extracted 1 files."));
+        assert!(output_str.contains("Extracting test.txt"));
+        assert!(output_str.contains("Extracted 1 files."));
 
         fs::remove_dir_all(temp_dir).unwrap();
     }
@@ -273,13 +404,14 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
 
         let extracted_file = temp_dir.join("folder/file.dat");
         assert!(extracted_file.exists());
         assert_eq!(fs::read(extracted_file).unwrap(), vec![1, 2, 3]);
 
         let output_str = String::from_utf8(stdout).unwrap();
-        assert!(output_str.contains("Extracted: data:folder/file.dat"));
+        assert!(output_str.contains("Extracting data:folder/file.dat"));
 
         fs::remove_dir_all(temp_dir).unwrap();
     }
@@ -308,11 +440,12 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 1);
 
         assert!(!temp_dir.join("other.txt").exists());
 
         let output_str = String::from_utf8(stdout).unwrap();
-        assert!(output_str.contains("No files matched the provided targets."));
+        assert!(output_str.contains("No matches."));
 
         fs::remove_dir_all(temp_dir).unwrap();
     }
@@ -359,15 +492,16 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
 
         assert_eq!(fs::read_to_string(temp_dir.join("a.txt")).unwrap(), "a");
         assert_eq!(fs::read_to_string(temp_dir.join("b.txt")).unwrap(), "b");
         assert!(!temp_dir.join("c.dat").exists());
 
         let output_str = String::from_utf8(stdout).unwrap();
-        assert!(output_str.contains("Extracted: a.txt"));
-        assert!(output_str.contains("Extracted: b.txt"));
-        assert!(output_str.contains("Successfully extracted 2 files."));
+        assert!(output_str.contains("Extracting a.txt"));
+        assert!(output_str.contains("Extracting b.txt"));
+        assert!(output_str.contains("Extracted 2 files."));
 
         fs::remove_dir_all(temp_dir).unwrap();
     }
@@ -401,13 +535,14 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
 
         let extracted_file = temp_dir.join("data/sub/file.txt");
         assert!(extracted_file.exists());
         assert_eq!(fs::read_to_string(extracted_file).unwrap(), "content");
 
         let output_str = String::from_utf8(stdout).unwrap();
-        assert!(output_str.contains("Extracted: data\\sub\\file.txt"));
+        assert!(output_str.contains("Extracting data\\sub\\file.txt"));
 
         fs::remove_dir_all(temp_dir).unwrap();
     }
@@ -457,9 +592,14 @@ mod tests {
             &mut stderr,
             /* flatten= */ false,
         );
-        assert!(res.is_err());
-        let err_msg = res.unwrap_err().to_string();
-        assert!(err_msg.contains("Not a directory") || err_msg.contains("exists"));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 3); // Failed count should be > 0
+
+        let stderr_str = String::from_utf8(stderr).unwrap();
+        assert!(
+            stderr_str.contains("ERROR: Failed to create directory")
+                || stderr_str.contains("Not a directory")
+        );
 
         fs::remove_file(temp_file).unwrap();
     }
@@ -488,9 +628,297 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
 
         assert!(Path::new("test.txt").exists());
         fs::remove_file("test.txt").unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_extraction_failure_with_code() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .times(1)
+            .returning(|| Box::new(vec!["fail.txt".to_string()].into_iter()));
+
+        archive
+            .expect_open_file()
+            .with(eq("fail.txt"))
+            .times(1)
+            .returning(|_| Err("Mock open failure".to_string()));
+
+        archive.expect_get_error().times(1).returning(|| 12345);
+
+        let temp_dir = Path::new("test_extract_fail_code");
+        fs::create_dir_all(temp_dir).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let res = execute_internal(
+            &archive,
+            /* targets= */ &[],
+            temp_dir,
+            &mut stdout,
+            &mut stderr,
+            /* flatten= */ false,
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 3);
+
+        let stderr_str = String::from_utf8(stderr).unwrap();
+        assert!(stderr_str.contains("Extraction failure (code: 12345) for 'fail.txt' (open)"));
+
+        let output_str = String::from_utf8(stdout).unwrap();
+        assert!(output_str.contains("Extracted 0 files (1 failed)."));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_mixed_run() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        // Alphabetical order for deterministic processing
+        archive.expect_files().times(1).returning(|| {
+            Box::new(
+                vec![
+                    "a_success.txt".to_string(),
+                    "b_skip/file.txt".to_string(),
+                    "c_fail.txt".to_string(),
+                    "d_collision/file.txt".to_string(),
+                ]
+                .into_iter(),
+            )
+        });
+
+        // a_success.txt: Success
+        archive
+            .expect_open_file()
+            .with(eq("a_success.txt"))
+            .times(1)
+            .returning(|_| Ok(mock_file(b"ok".to_vec())));
+
+        // b_skip/file.txt: Success
+        archive
+            .expect_open_file()
+            .with(eq("b_skip/file.txt"))
+            .times(1)
+            .returning(|_| Ok(mock_file(b"first".to_vec())));
+
+        // d_collision/file.txt: Skip (collision with b_skip/file.txt)
+        archive
+            .expect_open_file()
+            .with(eq("d_collision/file.txt"))
+            .times(0);
+
+        // c_fail.txt: Failure
+        archive
+            .expect_open_file()
+            .with(eq("c_fail.txt"))
+            .times(1)
+            .returning(|_| Err("Open error".to_string()));
+        archive.expect_get_error().returning(|| 555);
+
+        let temp_dir = Path::new("test_extract_mixed");
+        fs::create_dir_all(temp_dir).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let res = execute_internal(
+            &archive,
+            /* targets= */ &[],
+            temp_dir,
+            &mut stdout,
+            &mut stderr,
+            /* flatten= */ true,
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 3); // Failure takes precedence
+
+        let output_str = String::from_utf8(stdout).unwrap();
+        let error_str = String::from_utf8(stderr).unwrap();
+
+        assert!(output_str.contains("Extracting a_success.txt"));
+        assert!(output_str.contains("Extracting b_skip/file.txt"));
+        assert!(output_str.contains("Extracting c_fail.txt"));
+        assert!(output_str.contains("Extracting d_collision/file.txt"));
+        assert!(output_str.contains("Extracted 2 files (1 skipped, 1 failed)."));
+
+        assert!(error_str.contains("WARN: Skipped 'd_collision/file.txt' (Conflict/Exists)"));
+        assert!(error_str.contains("Extraction failure (code: 555) for 'c_fail.txt' (open)"));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_read_failure_mid_file() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .times(1)
+            .returning(|| Box::new(vec!["bad_read.bin".to_string()].into_iter()));
+
+        let mut mock_file = MockArchiveFile::default();
+        mock_file
+            .expect_read()
+            .times(1)
+            .returning(|_| Err(std::io::Error::new(std::io::ErrorKind::Other, "Read error")));
+
+        let mock_file_opt = Mutex::new(Some(mock_file));
+        archive
+            .expect_open_file()
+            .with(eq("bad_read.bin"))
+            .times(1)
+            .returning(move |_| {
+                Ok(mock_file_opt
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("Called open_file twice"))
+            });
+
+        archive.expect_get_error().returning(|| 999);
+
+        let temp_dir = Path::new("test_extract_read_fail");
+        fs::create_dir_all(temp_dir).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let res = execute_internal(
+            &archive,
+            /* targets= */ &[],
+            temp_dir,
+            &mut stdout,
+            &mut stderr,
+            /* flatten= */ false,
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 3);
+
+        let error_str = String::from_utf8(stderr).unwrap();
+        assert!(error_str.contains("Extraction failure (code: 999) for 'bad_read.bin' (read)"));
+
+        // Ensure partial file is deleted
+        assert!(!temp_dir.join("bad_read.bin").exists());
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_write_failure() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .times(1)
+            .returning(|| Box::new(vec!["fail_write.txt".to_string()].into_iter()));
+
+        archive
+            .expect_open_file()
+            .returning(|_| Ok(mock_file(b"some data".to_vec())));
+
+        let temp_dir = Path::new("test_extract_write_fail");
+        fs::create_dir_all(temp_dir).unwrap();
+        let target_file = temp_dir.join("fail_write.txt");
+
+        // We can't easily make fs::File::create or write_all fail without messing with permissions
+        // or using a mock filesystem. But we can create a directory where the file should be.
+        fs::create_dir(&target_file).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let res = execute_internal(
+            &archive,
+            /* targets= */ &[],
+            temp_dir,
+            &mut stdout,
+            &mut stderr,
+            /* flatten= */ false,
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 3);
+
+        let error_str = String::from_utf8(stderr).unwrap();
+        // Since we created a directory at fail_write.txt, File::create should fail.
+        assert!(error_str.contains("Extraction failure for 'fail_write.txt' (create)"));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_filename_failure() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        // A path that has no filename (terminates in .. or is root)
+        archive
+            .expect_files()
+            .times(1)
+            .returning(|| Box::new(vec!["..".to_string()].into_iter()));
+
+        let temp_dir = Path::new("test_extract_filename_fail");
+        fs::create_dir_all(temp_dir).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let res = execute_internal(
+            &archive,
+            /* targets= */ &[],
+            temp_dir,
+            &mut stdout,
+            &mut stderr,
+            /* flatten= */ true,
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 3);
+
+        let error_str = String::from_utf8(stderr).unwrap();
+        assert!(error_str.contains("ERROR: Failed to extract filename from path: .."));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_execute_internal_skip_only_no_match() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive.expect_files().times(1).returning(|| {
+            Box::new(vec!["a/file.txt".to_string(), "b/file.txt".to_string()].into_iter())
+        });
+
+        // "a/file.txt" -> Success
+        archive
+            .expect_open_file()
+            .returning(|_| Ok(mock_file(b"data".to_vec())));
+
+        let temp_dir = Path::new("test_extract_skip_only");
+        fs::create_dir_all(temp_dir).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let res = execute_internal(
+            &archive,
+            /* targets= */ &["*.txt".to_string()],
+            temp_dir,
+            &mut stdout,
+            &mut stderr,
+            /* flatten= */ true,
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 2); // Skip exists
+
+        let output_str = String::from_utf8(stdout).unwrap();
+        assert!(output_str.contains("Extracted 1 files (1 skipped)."));
+
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 
     #[test]
@@ -523,7 +951,7 @@ mod tests {
                 crate::AppError::Cancelled(op) => assert_eq!(*op, "Extraction"),
             }
         } else {
-            panic!("Expected AppError::Cancelled");
+            panic!("Expected AppError::Cancelled, got: {:?}", err);
         }
 
         assert!(stdout.is_empty());
@@ -585,7 +1013,7 @@ mod tests {
                 crate::AppError::Cancelled(op) => assert_eq!(*op, "Extraction"),
             }
         } else {
-            panic!("Expected AppError::Cancelled");
+            panic!("Expected AppError::Cancelled, got: {:?}", err);
         }
 
         // Partial file should have been deleted
@@ -643,6 +1071,7 @@ mod tests {
             /* flatten= */ true,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
 
         // Files should be in the root of temp_dir
         assert_eq!(fs::read_to_string(temp_dir.join("test.txt")).unwrap(), "a");
@@ -693,6 +1122,7 @@ mod tests {
             /* flatten= */ true,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 2);
 
         // Only the first file should exist
         assert_eq!(
@@ -701,13 +1131,11 @@ mod tests {
         );
 
         let stderr_str = String::from_utf8(stderr).unwrap();
-        assert!(stderr_str.contains(
-            "WARN: Flatten collision for 'file.txt'. Skipping subsequent match from 'b/file.txt'."
-        ));
+        assert!(stderr_str.contains("WARN: Skipped 'b/file.txt' (Conflict/Exists)"));
 
         let output_str = String::from_utf8(stdout).unwrap();
-        assert!(output_str.contains("Extracted: a/file.txt"));
-        assert!(!output_str.contains("Extracted: b/file.txt"));
+        assert!(output_str.contains("Extracting a/file.txt"));
+        assert!(output_str.contains("Extracted 1 files (1 skipped)."));
 
         fs::remove_dir_all(temp_dir).unwrap();
     }
@@ -760,6 +1188,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 0);
 
         assert_eq!(
             fs::read_to_string(temp_dir.join("a/file.txt")).unwrap(),

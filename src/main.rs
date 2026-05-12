@@ -92,6 +92,14 @@ enum Commands {
         ///
         /// Full syntax documentation: <https://docs.rs/globset/latest/globset/#syntax>
         ///
+        /// Exit Codes:
+        ///   0   Success (All files extracted successfully)
+        ///   1   No Matches (No files matched the provided targets)
+        ///   2   Warning (One or more files skipped due to flatten conflict)
+        ///   3   Error (At least one file failed to extract)
+        ///   130 Terminated by SIGINT (Ctrl+C)
+        ///   141 Terminated by SIGPIPE
+        ///
         /// Examples:
         ///   casc-cli extract ./Data data/global/excel/weapons.txt
         ///   casc-cli extract ./Data data/global/excel/
@@ -121,21 +129,19 @@ fn main() {
     .expect("Error setting Ctrl-C handler");
 
     let cli = Cli::parse();
-    if let Err(e) = run(cli) {
-        std::process::exit(handle_error(e));
+    match run(cli) {
+        Ok(exit_code) => std::process::exit(exit_code),
+        Err(e) => std::process::exit(handle_error(e)),
     }
 }
 
 /// Handles an application error and returns the appropriate exit code.
-///
-/// Broken pipe errors and user cancellations are handled gracefully by returning
-/// an exit code of 0. All other errors result in an exit code of 1.
 fn handle_error(e: anyhow::Error) -> i32 {
     // Attempt to downcast the error to an `std::io::Error` to check for BrokenPipe.
     if let Some(io_err) = e.downcast_ref::<std::io::Error>()
         && io_err.kind() == std::io::ErrorKind::BrokenPipe
     {
-        return 0;
+        return 141;
     }
 
     // Check for structured application errors (e.g., Cancellation).
@@ -145,7 +151,7 @@ fn handle_error(e: anyhow::Error) -> i32 {
                 if DEBUG {
                     eprintln!("Debug: {}", e);
                 }
-                return 0;
+                return 130;
             }
         }
     }
@@ -160,16 +166,19 @@ fn handle_error(e: anyhow::Error) -> i32 {
 /// * `cli` - The parsed `Cli` arguments.
 ///
 /// # Returns
-/// A `Result` indicating success (`Ok(())`) or an error.
+/// A `Result` containing the exit code or an error.
 ///
 /// # Errors
 /// Returns an error if the requested subcommand fails to execute.
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Commands::List {
             archive_dir,
             targets,
-        } => commands::list::execute(&archive_dir, &targets),
+        } => {
+            commands::list::execute(&archive_dir, &targets)?;
+            Ok(0)
+        }
         Commands::Extract {
             archive_dir,
             targets,
@@ -194,7 +203,7 @@ pub mod tests {
             std::io::ErrorKind::BrokenPipe,
             "Broken pipe",
         ));
-        assert_eq!(handle_error(err), 0);
+        assert_eq!(handle_error(err), 141);
     }
 
     #[test]
@@ -206,9 +215,9 @@ pub mod tests {
     #[test]
     fn test_handle_error_cancellation() {
         let err = anyhow::Error::new(AppError::Cancelled(/* op= */ "Listing"));
-        assert_eq!(handle_error(err), 0);
+        assert_eq!(handle_error(err), 130);
         let err = anyhow::Error::new(AppError::Cancelled(/* op= */ "Extraction"));
-        assert_eq!(handle_error(err), 0);
+        assert_eq!(handle_error(err), 130);
     }
 
     #[test]

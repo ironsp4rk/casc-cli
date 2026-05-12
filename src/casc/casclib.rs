@@ -167,6 +167,12 @@ pub trait CascLib {
     /// # Safety
     /// This function is unsafe as it performs FFI calls with a raw handle.
     unsafe fn casc_close_file(&self, hFile: Handle) -> bool;
+
+    /// Returns the last error code set by a CascLib function.
+    ///
+    /// # Returns
+    /// The last error code (DWORD).
+    unsafe fn get_casc_error(&self) -> u32;
 }
 
 /// The default production implementation of `CascLib` that calls the underlying C-FFI functions.
@@ -234,6 +240,10 @@ impl CascLib for DefaultCascLib {
 
     unsafe fn casc_close_file(&self, hFile: Handle) -> bool {
         bindings::CascCloseFile(hFile)
+    }
+
+    unsafe fn get_casc_error(&self) -> u32 {
+        bindings::GetCascError()
     }
 }
 

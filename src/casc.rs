@@ -110,6 +110,11 @@ impl<L: CascLib> Archive<L> {
             }
         }
     }
+
+    /// Returns the last error code from the underlying library.
+    pub fn get_error(&self) -> u32 {
+        unsafe { self.lib.get_casc_error() }
+    }
 }
 
 impl<L: CascLib> Drop for Archive<L> {
@@ -149,6 +154,8 @@ pub mod mock {
             pub fn files<'a>(&'a self) -> Box<dyn Iterator<Item = String> + 'a>;
             /// Mock for the `open_file` method.
             pub fn open_file(&self, name: &str) -> Result<MockArchiveFile, String>;
+            /// Mock for the `get_error` method.
+            pub fn get_error(&self) -> u32;
         }
     }
 }
@@ -412,5 +419,22 @@ mod tests {
         assert_eq!(file.read(&mut buf).unwrap(), 30);
         assert_eq!(file.read(&mut buf).unwrap(), 10);
         assert_eq!(file.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_archive_get_error() {
+        use super::casclib::{Handle, MockCascLib};
+        let mut lib = MockCascLib::default();
+        lib.expect_get_casc_error().return_const(12345u32);
+        lib.expect_casc_close_storage()
+            .withf(|&h| h == 1 as Handle)
+            .times(1)
+            .return_const(true);
+
+        let archive = Archive {
+            handle: 1 as Handle,
+            lib,
+        };
+        assert_eq!(archive.get_error(), 12345);
     }
 }

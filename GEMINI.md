@@ -37,7 +37,7 @@ casc-cli/
 ## Code Verification
 After making any code changes, always perform the following verification steps:
 1. **Formatting:** Run `cargo fmt` to ensure the code follows standard Rust styling.
-2. **Linting:** Run `cargo clippy` to catch common mistakes and improve code quality.
+2. **Linting:** Run `cargo clippy --all-targets --all-features` to catch common mistakes and improve code quality across all targets and features.
 3. **Testing:** Run `cargo test` to execute unit tests and ensure no regressions.
 
 ## Coding Standards & Stule

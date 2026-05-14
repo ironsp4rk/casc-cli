@@ -768,7 +768,7 @@ mod tests {
         mock_file
             .expect_read()
             .times(1)
-            .returning(|_| Err(std::io::Error::new(std::io::ErrorKind::Other, "Read error")));
+            .returning(|_| Err(std::io::Error::other("Read error")));
 
         let mock_file_opt = Mutex::new(Some(mock_file));
         archive

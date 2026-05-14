@@ -50,9 +50,10 @@ This CLI adopts a modern subcommand architecture paired with classic single-lett
 
 By standard Unix convention, successful operations should be silent in scripting environments. The tool should use TTY detection to display transient progress bars for interactive terminal sessions, but output absolute silence or clean final summaries otherwise.
 
-## Global Flags
+## Global Options
 * `-v, --verbose`: Print detailed output (e.g., list every file path as it is processed). 
 * `-q, --quiet`: Suppress all non-error output. When enabled, the CLI will output absolutely zero bytes unless a fatal, execution-halting error occurs.
+* `-V, --version`: Print the version of the `casc` tool.
 
 ---
 
@@ -71,13 +72,13 @@ A target can be:
 Lists the contents of the CASC archive. This command is **recursive by default**. If run without targets, it will list every file in the archive. If targets are provided, it filters the output based on those targets.
 
 **Syntax:**
-`<cli> list <archive_dir> [targets...] [flags]`
+`<cli> list [options] <archive_dir> [targets...]`
 
-**Flags:**
+**Options:**
 * `-d, --depth <N>`: Limit the recursion depth. `--depth 1` prints only immediate children.
 * `-t, --tree`: Output the contents in a visual directory tree format instead of a flat list.
 
-**Global Flag Interactions (List):**
+**Global Option Interactions (List):**
 * **Verbose (`-v`): Detailed View.** Transforms the output from a flat list of paths into a detailed table including metadata (e.g., File Size, Compressed Size, Hash Keys, File Path) similar to the `ls -l` Unix command.
 * **Quiet (`-q`): Validation / Existence Mode.** Suppresses all `stdout`. Acts purely as a boolean check via the exit code `0` (found/healthy) or `1` (missing/corrupted).
 
@@ -97,9 +98,9 @@ Lists the contents of the CASC archive. This command is **recursive by default**
 Extracts files or directories from the CASC archive. 
 
 **Syntax:**
-`<cli> extract <archive_dir> [targets...] [flags]`
+`<cli> extract [options] <archive_dir> [targets...]`
 
-**Flags:**
+**Options:**
 * `-o, --output <dir>`: Extract files into a specific directory. Defaults to the current working directory (`./`).
 * `-f, --flatten`: Strip all internal directory structures and extract files directly into the root of the output destination.
 

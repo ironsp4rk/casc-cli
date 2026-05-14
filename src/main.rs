@@ -6,6 +6,7 @@
 
 mod casc;
 mod commands;
+pub mod exit_codes;
 mod targets;
 
 use anyhow::Result;
@@ -67,6 +68,13 @@ enum Commands {
         ///
         /// Full syntax documentation: <https://docs.rs/globset/latest/globset/#syntax>
         ///
+        /// Exit Codes:
+        ///   0   Success (At least one match found, or no targets provided)
+        ///   1   No Matches (Targets provided but none matched)
+        ///   3   Error (Archive failed to open or other fatal error)
+        ///   130 Terminated by SIGINT (Ctrl+C)
+        ///   141 Terminated by SIGPIPE
+        ///
         /// Examples:
         ///   casc-cli list ./Data                           (List all files)
         ///   casc-cli list ./Data data/global/              (List everything in data/global/)
@@ -93,10 +101,10 @@ enum Commands {
         /// Full syntax documentation: <https://docs.rs/globset/latest/globset/#syntax>
         ///
         /// Exit Codes:
-        ///   0   Success (All files extracted successfully)
+        ///   0   Success (All files processed successfully)
         ///   1   No Matches (No files matched the provided targets)
-        ///   2   Warning (One or more files skipped due to flatten conflict)
-        ///   3   Error (At least one file failed to extract)
+        ///   2   Warning (One or more files skipped, e.g. due to flatten conflicts)
+        ///   3   Error (At least one file failed to process or other fatal error)
         ///   130 Terminated by SIGINT (Ctrl+C)
         ///   141 Terminated by SIGPIPE
         ///
@@ -141,7 +149,7 @@ fn handle_error(e: anyhow::Error) -> i32 {
     if let Some(io_err) = e.downcast_ref::<std::io::Error>()
         && io_err.kind() == std::io::ErrorKind::BrokenPipe
     {
-        return 141;
+        return exit_codes::SIGPIPE;
     }
 
     // Check for structured application errors (e.g., Cancellation).
@@ -151,13 +159,13 @@ fn handle_error(e: anyhow::Error) -> i32 {
                 if DEBUG {
                     eprintln!("Debug: {}", e);
                 }
-                return 130;
+                return exit_codes::SIGINT;
             }
         }
     }
 
     eprintln!("Error: {}", e);
-    1
+    exit_codes::ERROR
 }
 
 /// Primary execution handler that dispatches work based on the parsed CLI command.
@@ -175,10 +183,7 @@ fn run(cli: Cli) -> Result<i32> {
         Commands::List {
             archive_dir,
             targets,
-        } => {
-            commands::list::execute(&archive_dir, &targets)?;
-            Ok(0)
-        }
+        } => commands::list::execute(&archive_dir, &targets),
         Commands::Extract {
             archive_dir,
             targets,
@@ -203,21 +208,21 @@ pub mod tests {
             std::io::ErrorKind::BrokenPipe,
             "Broken pipe",
         ));
-        assert_eq!(handle_error(err), 141);
+        assert_eq!(handle_error(err), exit_codes::SIGPIPE);
     }
 
     #[test]
     fn test_handle_error_other() {
         let err = anyhow::Error::msg("Some other error");
-        assert_eq!(handle_error(err), 1);
+        assert_eq!(handle_error(err), exit_codes::ERROR);
     }
 
     #[test]
     fn test_handle_error_cancellation() {
         let err = anyhow::Error::new(AppError::Cancelled(/* op= */ "Listing"));
-        assert_eq!(handle_error(err), 130);
+        assert_eq!(handle_error(err), exit_codes::SIGINT);
         let err = anyhow::Error::new(AppError::Cancelled(/* op= */ "Extraction"));
-        assert_eq!(handle_error(err), 130);
+        assert_eq!(handle_error(err), exit_codes::SIGINT);
     }
 
     #[test]

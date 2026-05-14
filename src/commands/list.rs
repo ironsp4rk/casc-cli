@@ -21,13 +21,14 @@ use std::sync::atomic::Ordering;
 /// * `targets` - A slice of target patterns to filter the output.
 ///
 /// # Returns
-/// A `Result` indicating success (`Ok(())`) or an error if opening
-/// the archive or printing fails.
+/// A `Result` containing the exit code:
+/// * [`crate::exit_codes::SUCCESS`] - At least one match found, or no targets provided.
+/// * [`crate::exit_codes::NO_MATCHES`] - Targets provided but none matched.
 ///
 /// # Errors
 /// Returns an error if the archive at `archive_dir` cannot be opened, if target
 /// patterns are invalid, or if there is an issue writing to standard output.
-pub fn execute(archive_dir: &Path, targets: &[String]) -> Result<()> {
+pub fn execute(archive_dir: &Path, targets: &[String]) -> Result<i32> {
     let archive = Archive::open(archive_dir).map_err(|e| anyhow!(e))?;
     execute_internal(&archive, targets, &mut std::io::stdout())
 }
@@ -43,9 +44,16 @@ pub fn execute(archive_dir: &Path, targets: &[String]) -> Result<()> {
 /// * `writer` - A mutable reference to a type implementing `Write` (e.g., `stdout` or a `Vec<u8>`).
 ///
 /// # Returns
-/// A `Result` indicating success or an error message.
-fn execute_internal<W: Write>(archive: &Archive, targets: &[String], writer: &mut W) -> Result<()> {
+/// A `Result` containing the exit code:
+/// * [`crate::exit_codes::SUCCESS`] - At least one match found, or no targets provided.
+/// * [`crate::exit_codes::NO_MATCHES`] - Targets provided but none matched.
+fn execute_internal<W: Write>(
+    archive: &Archive,
+    targets: &[String],
+    writer: &mut W,
+) -> Result<i32> {
     let matcher = TargetMatcher::new(targets).map_err(|e| anyhow!(e))?;
+    let mut match_count = 0;
 
     for file in archive.files() {
         // Exit early if the user pressed Ctrl+C
@@ -60,9 +68,14 @@ fn execute_internal<W: Write>(archive: &Archive, targets: &[String], writer: &mu
         }
 
         writeln!(writer, "{}", file)?;
+        match_count += 1;
     }
 
-    Ok(())
+    if match_count == 0 && !targets.is_empty() {
+        Ok(crate::exit_codes::NO_MATCHES)
+    } else {
+        Ok(crate::exit_codes::SUCCESS)
+    }
 }
 
 #[cfg(test)]
@@ -108,6 +121,7 @@ mod tests {
 
         let res = execute(path, /* targets= */ &[]);
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
     }
 
     #[test]
@@ -124,6 +138,7 @@ mod tests {
         let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
         assert!(output.is_empty());
     }
 
@@ -141,6 +156,7 @@ mod tests {
         let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
         assert_eq!(String::from_utf8(output).unwrap(), "only_one.txt\n");
     }
 
@@ -167,6 +183,7 @@ mod tests {
         let res = execute_internal(&archive, &targets, &mut output);
 
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
         let result_str = String::from_utf8(output).unwrap();
         assert_eq!(
             result_str,
@@ -187,8 +204,28 @@ mod tests {
         let res = execute_internal(&archive, /* targets= */ &[], &mut output);
 
         assert!(res.is_ok());
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
         let result_str = String::from_utf8(output).unwrap();
         assert_eq!(result_str, "file1.txt\ndir/file2.dat\n");
+    }
+
+    #[test]
+    fn test_execute_no_matches() {
+        let _lock = CANCEL_MUTEX.lock().unwrap();
+        crate::CANCELLED.store(false, Ordering::SeqCst);
+        let mut archive = Archive::default();
+        archive
+            .expect_files()
+            .times(1)
+            .returning(|| Box::new(vec!["file1.txt".to_string()].into_iter()));
+
+        let mut output = Vec::new();
+        let targets = vec!["nonexistent.txt".to_string()];
+        let res = execute_internal(&archive, &targets, &mut output);
+
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), crate::exit_codes::NO_MATCHES);
+        assert!(output.is_empty());
     }
 
     #[test]

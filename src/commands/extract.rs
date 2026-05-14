@@ -113,13 +113,13 @@ fn execute_internal<W1: io::Write, W2: io::Write>(
     }
 
     if extractor.failed_count > 0 {
-        Ok(3)
+        Ok(crate::exit_codes::ERROR)
     } else if extractor.skipped_count > 0 {
-        Ok(2)
+        Ok(crate::exit_codes::WARNING)
     } else if extractor.extracted_count == 0 && !targets.is_empty() {
-        Ok(1)
+        Ok(crate::exit_codes::NO_MATCHES)
     } else {
-        Ok(0)
+        Ok(crate::exit_codes::SUCCESS)
     }
 }
 
@@ -362,7 +362,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 0);
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
 
         let extracted_file = temp_dir.join("test.txt");
         assert!(extracted_file.exists());
@@ -404,7 +404,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 0);
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
 
         let extracted_file = temp_dir.join("folder/file.dat");
         assert!(extracted_file.exists());
@@ -440,7 +440,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 1);
+        assert_eq!(res.unwrap(), crate::exit_codes::NO_MATCHES);
 
         assert!(!temp_dir.join("other.txt").exists());
 
@@ -492,7 +492,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 0);
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
 
         assert_eq!(fs::read_to_string(temp_dir.join("a.txt")).unwrap(), "a");
         assert_eq!(fs::read_to_string(temp_dir.join("b.txt")).unwrap(), "b");
@@ -535,7 +535,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 0);
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
 
         let extracted_file = temp_dir.join("data/sub/file.txt");
         assert!(extracted_file.exists());
@@ -593,7 +593,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 3); // Failed count should be > 0
+        assert_eq!(res.unwrap(), crate::exit_codes::ERROR); // Failed count should be > 0
 
         let stderr_str = String::from_utf8(stderr).unwrap();
         assert!(
@@ -628,7 +628,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 0);
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
 
         assert!(Path::new("test.txt").exists());
         fs::remove_file("test.txt").unwrap();
@@ -666,7 +666,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 3);
+        assert_eq!(res.unwrap(), crate::exit_codes::ERROR);
 
         let stderr_str = String::from_utf8(stderr).unwrap();
         assert!(stderr_str.contains("Extraction failure (code: 12345) for 'fail.txt' (open)"));
@@ -737,7 +737,7 @@ mod tests {
             /* flatten= */ true,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 3); // Failure takes precedence
+        assert_eq!(res.unwrap(), crate::exit_codes::ERROR); // Failure takes precedence
 
         let output_str = String::from_utf8(stdout).unwrap();
         let error_str = String::from_utf8(stderr).unwrap();
@@ -799,7 +799,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 3);
+        assert_eq!(res.unwrap(), crate::exit_codes::ERROR);
 
         let error_str = String::from_utf8(stderr).unwrap();
         assert!(error_str.contains("Extraction failure (code: 999) for 'bad_read.bin' (read)"));
@@ -843,7 +843,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 3);
+        assert_eq!(res.unwrap(), crate::exit_codes::ERROR);
 
         let error_str = String::from_utf8(stderr).unwrap();
         // Since we created a directory at fail_write.txt, File::create should fail.
@@ -877,7 +877,7 @@ mod tests {
             /* flatten= */ true,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 3);
+        assert_eq!(res.unwrap(), crate::exit_codes::ERROR);
 
         let error_str = String::from_utf8(stderr).unwrap();
         assert!(error_str.contains("ERROR: Failed to extract filename from path: .."));
@@ -913,7 +913,7 @@ mod tests {
             /* flatten= */ true,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 2); // Skip exists
+        assert_eq!(res.unwrap(), crate::exit_codes::WARNING); // Skip exists
 
         let output_str = String::from_utf8(stdout).unwrap();
         assert!(output_str.contains("Extracted 1 files (1 skipped)."));
@@ -1071,7 +1071,7 @@ mod tests {
             /* flatten= */ true,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 0);
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
 
         // Files should be in the root of temp_dir
         assert_eq!(fs::read_to_string(temp_dir.join("test.txt")).unwrap(), "a");
@@ -1122,7 +1122,7 @@ mod tests {
             /* flatten= */ true,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 2);
+        assert_eq!(res.unwrap(), crate::exit_codes::WARNING);
 
         // Only the first file should exist
         assert_eq!(
@@ -1188,7 +1188,7 @@ mod tests {
             /* flatten= */ false,
         );
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 0);
+        assert_eq!(res.unwrap(), crate::exit_codes::SUCCESS);
 
         assert_eq!(
             fs::read_to_string(temp_dir.join("a/file.txt")).unwrap(),

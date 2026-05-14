@@ -38,9 +38,10 @@ impl std::error::Error for AppError {}
 pub static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Command-line argument structure for the `casc-cli` application.
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(
     name = "casc",
+    version,
     about = "Cross-platform CLI tool for Blizzard CASC archives"
 )]
 struct Cli {
@@ -289,5 +290,13 @@ pub mod tests {
     #[test]
     fn test_cli_help() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn test_cli_version() {
+        let res = Cli::try_parse_from(["casc", "--version"]);
+        assert!(res.is_err()); // Clap handles --version by returning an error with version info
+        let err = res.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
     }
 }

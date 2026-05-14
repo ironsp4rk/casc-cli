@@ -40,7 +40,7 @@ pub static CANCELLED: AtomicBool = AtomicBool::new(false);
 /// Command-line argument structure for the `casc-cli` application.
 #[derive(Parser)]
 #[command(
-    name = "casc-cli",
+    name = "casc",
     about = "Cross-platform CLI tool for Blizzard CASC archives"
 )]
 struct Cli {
@@ -76,10 +76,10 @@ enum Commands {
         ///   141 Terminated by SIGPIPE
         ///
         /// Examples:
-        ///   casc-cli list ./Data                           (List all files)
-        ///   casc-cli list ./Data data/global/              (List everything in data/global/)
-        ///   casc-cli list ./Data '*.txt'                   (List all text files anywhere)
-        ///   casc-cli list ./Data 'data/global/**/*.txt'    (List all text files in data/global/ and subdirectories)
+        ///   casc list ./Data                           (List all files)
+        ///   casc list ./Data data/global/              (List everything in data/global/)
+        ///   casc list ./Data '*.txt'                   (List all text files anywhere)
+        ///   casc list ./Data 'data/global/**/*.txt'    (List all text files in data/global/ and subdirectories)
         #[arg(verbatim_doc_comment)]
         targets: Vec<String>,
     },
@@ -109,10 +109,10 @@ enum Commands {
         ///   141 Terminated by SIGPIPE
         ///
         /// Examples:
-        ///   casc-cli extract ./Data data/global/excel/weapons.txt
-        ///   casc-cli extract ./Data data/global/excel/
-        ///   casc-cli extract ./Data '*.txt'
-        ///   casc-cli extract ./Data 'data/global/**/*.txt'
+        ///   casc extract ./Data data/global/excel/weapons.txt
+        ///   casc extract ./Data data/global/excel/
+        ///   casc extract ./Data '*.txt'
+        ///   casc extract ./Data 'data/global/**/*.txt'
         #[arg(verbatim_doc_comment)]
         targets: Vec<String>,
 
@@ -227,7 +227,7 @@ pub mod tests {
 
     #[test]
     fn test_cli_parsing_list() {
-        let cli = Cli::parse_from(["casc-cli", "list", "/path/to/archive", "target1", "target2"]);
+        let cli = Cli::parse_from(["casc", "list", "/path/to/archive", "target1", "target2"]);
         match cli.command {
             Commands::List {
                 archive_dir,
@@ -242,7 +242,7 @@ pub mod tests {
 
     #[test]
     fn test_cli_parsing_alias_l() {
-        let cli = Cli::parse_from(["casc-cli", "l", "/path/to/archive"]);
+        let cli = Cli::parse_from(["casc", "l", "/path/to/archive"]);
         match cli.command {
             Commands::List {
                 archive_dir,
@@ -257,7 +257,7 @@ pub mod tests {
 
     #[test]
     fn test_cli_parsing_extract() {
-        let cli = Cli::parse_from(["casc-cli", "extract", "/path/to/archive", "target1"]);
+        let cli = Cli::parse_from(["casc", "extract", "/path/to/archive", "target1"]);
         match cli.command {
             Commands::Extract {
                 archive_dir,
@@ -276,13 +276,13 @@ pub mod tests {
 
     #[test]
     fn test_cli_missing_arg() {
-        let res = Cli::try_parse_from(["casc-cli", "list"]);
+        let res = Cli::try_parse_from(["casc", "list"]);
         assert!(res.is_err());
     }
 
     #[test]
     fn test_cli_invalid_subcommand() {
-        let res = Cli::try_parse_from(["casc-cli", "invalid"]);
+        let res = Cli::try_parse_from(["casc", "invalid"]);
         assert!(res.is_err());
     }
 

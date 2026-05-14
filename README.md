@@ -33,25 +33,25 @@ cargo build
 Lists the contents of the CASC archive.
 
 **Syntax:**
-`casc-cli list <archive_dir> [targets...]`
+`casc list <archive_dir> [targets...]`
 
 **Examples:**
-* `casc-cli l ./Data` *(List everything)*
-* `casc-cli l ./Data data/global/excel/` *(List everything inside the excel folder)*
-* `casc-cli l ./Data '*.txt'` *(List all text files anywhere)*
+* `casc l ./Data` *(List everything)*
+* `casc l ./Data data/global/excel/` *(List everything inside the excel folder)*
+* `casc l ./Data '*.txt'` *(List all text files anywhere)*
 
 #### Extract (`extract`, `x`)
 Extracts files from the CASC archive, preserving their internal directory structure in the current working directory.
 
 **Syntax:**
-`casc-cli extract <archive_dir> [targets...]`
+`casc extract <archive_dir> [targets...]`
 
 **Examples:**
-* `casc-cli x ./Data data/global/excel/weapons.txt` *(Extract a single file)*
-* `casc-cli x ./Data data/global/excel/weapons.txt data/global/excel/armor.txt` *(Extract multiple specific files)*
-* `casc-cli x ./Data data/global/excel/` *(Extract an entire directory)*
-* `casc-cli x ./Data '*.txt'` *(Extract all text files anywhere)*
-* `casc-cli x ./Data '*.txt' data/global/config.ini` *(Extract multiple targets: a glob pattern and a specific file)*
+* `casc x ./Data data/global/excel/weapons.txt` *(Extract a single file)*
+* `casc x ./Data data/global/excel/weapons.txt data/global/excel/armor.txt` *(Extract multiple specific files)*
+* `casc x ./Data data/global/excel/` *(Extract an entire directory)*
+* `casc x ./Data '*.txt'` *(Extract all text files anywhere)*
+* `casc x ./Data '*.txt' data/global/config.ini` *(Extract multiple targets: a glob pattern and a specific file)*
 
 ### Target Resolution
 Both the `list` and `extract` commands rely on **Targets**. Positional arguments provided after the archive directory are treated as targets.

@@ -1,7 +1,7 @@
 # Project: casc-cli
 
 ## Overview
-`casc-cli` is a cross-platform command-line utility written in Rust. Its primary purpose is to extract files from Blizzard CASC archives. It achieves this by acting as a CLI interface and providing a safe Rust FFI wrapper around Ladislav Zezula's C++ `CascLib`.
+`casc-cli` (binary `casc`) is a cross-platform command-line utility written in Rust. Its primary purpose is to extract files from Blizzard CASC archives. It achieves this by acting as a CLI interface and providing a safe Rust FFI wrapper around Ladislav Zezula's C++ `CascLib`.
 
 ## Tech Stack
 * **Language:** Rust (CLI app and FFI wrapper).

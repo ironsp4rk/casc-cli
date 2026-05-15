@@ -1,7 +1,21 @@
 [package]
-name = "casc-cli"
+name = "casc"
 version = "0.1.0"
 edition = "2024"
+description = "A cross-platform CLI tool for Blizzard CASC archives."
+license = "MIT"
+repository = "https://github.com/ironsp4rk/casc-cli"
+keywords = ["casc", "blizzard", "archive", "diablo", "diablo2"]
+categories = ["command-line-utilities"]
+exclude = [
+    "ext/CascLib/listfile/*",
+    "ext/CascLib/debian/*",
+    "ext/CascLib/.vscode/*",
+    "ext/CascLib/*.sln",
+    "ext/CascLib/*.vcxproj*",
+    "ext/CascLib/*.vcproj",
+    "ext/CascLib/*.bat",
+]
 
 [[bin]]
 name = "casc"

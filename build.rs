@@ -24,7 +24,7 @@ fn main() {
     }
 
     // 3. Generate bindings using bindgen
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header("ext/CascLib/src/CascLib.h")
         // CascLib uses some Windows types even on Linux (via CascPort.h)
         .clang_arg("-Iext/CascLib/src")
@@ -33,7 +33,24 @@ fn main() {
         // Disable layout tests (size assertions) because they can fail on some
         // systems with complex glibc/Clang interactions.
         .layout_tests(false)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+
+    // On macOS, we need to provide the SDK path to bindgen so it can find standard headers
+    // when using a non-system libclang (e.g. from Homebrew).
+    let target = env::var("TARGET").unwrap_or_default();
+    if target.contains("apple-darwin") {
+        if let Ok(output) = std::process::Command::new("xcrun")
+            .args(["--show-sdk-path"])
+            .output()
+        {
+            if output.status.success() {
+                let sdk_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                builder = builder.clang_arg(format!("-isysroot{}", sdk_path));
+            }
+        }
+    }
+
+    let bindings = builder
         .generate()
         .expect("Unable to generate bindings");
 

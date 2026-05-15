@@ -1,6 +1,6 @@
 [package]
 name = "casc"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A cross-platform CLI tool for Blizzard CASC archives."
 license = "MIT"
@@ -22,17 +22,17 @@ name = "casc"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1.0.102"
-clap = { version = "4.5", features = ["derive"] }
-ctrlc = "3.5.2"
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+ctrlc = "3.5"
 globset = "0.4"
 
 [dev-dependencies]
-mockall = "0.13"
+mockall = "0.14"
 
 [build-dependencies]
 cmake = "0.1"
-bindgen = "0.71"
+bindgen = "0.72"
 
 [profile.release]
 opt-level = 's'

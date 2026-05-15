@@ -5,8 +5,8 @@ A cross-platform CLI tool for Blizzard CASC archives.
 
 While specifically developed and tested against **Diablo II: Resurrected**, it is designed to work with any modern Blizzard game using the CASC storage format.
 
-[![Crate](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/casc.svg)](https://crates.io/crates/casc)
+[![License](https://img.shields.io/crates/l/casc.svg)](https://github.com/ironsp4rk/casc-cli/blob/master/LICENSE)
 
 ### Documentation quick links
 *   [Quick Start](#quick-start)
@@ -47,7 +47,16 @@ casc list ./Data data/global/config.ini
 ---
 
 ## Installation
-Currently, `casc-cli` must be built from source. Detailed instructions, including prerequisites for various platforms, can be found in the [Building & Testing](#building--testing) section.
+`casc-cli` can be installed with `cargo` (where it is published as `casc`):
+
+```bash
+cargo install casc
+```
+
+`casc-cli`'s minimum supported Rust version is **1.85.0** (Rust 2024 edition).
+
+### Building from source
+Detailed instructions, including prerequisites for various platforms, can be found in the [Building & Testing](#building--testing) section.
 
 ---
 
@@ -144,7 +153,7 @@ git clone https://github.com/ironsp4rk/casc-cli
 cd casc-cli
 cargo build --release
 ./target/release/casc --version
-casc 0.1.0
+casc 0.1.1
 ```
 
 ### Verification

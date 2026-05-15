@@ -14,6 +14,12 @@ targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-
 # Allow manual edits to the CI workflow
 allow-dirty = ["ci"]
 # Dependencies to install on the runners
-apt-packages = ["libclang-dev", "cmake"]
-brew-packages = ["llvm", "cmake"]
-chocolatey-packages = ["llvm", "cmake"]
+[dist.dependencies.apt]
+libclang-dev = "*"
+cmake = "*"
+[dist.dependencies.homebrew]
+llvm = "*"
+cmake = "*"
+[dist.dependencies.chocolatey]
+llvm = "*"
+cmake = "*"
